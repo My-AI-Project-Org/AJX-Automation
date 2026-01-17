@@ -31,4 +31,4 @@ jobs:
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
         # The "-W ignore" flag tells Python to shut up about any warnings
-        run: python -W ignore phase1_smart_split.py
+        run: python -u -W ignore phase1_smart_split.py
