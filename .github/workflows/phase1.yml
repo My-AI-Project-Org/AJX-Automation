@@ -22,12 +22,13 @@ jobs:
           sudo apt-get install -y poppler-utils
 
       - name: Install Python Libraries
-        # FORCE INSTALL VERSION 0.8.3 TO STOP ERRORS
+        # We force version 0.7.2 because it is STABLE and has no warnings
         run: |
-          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image "google-generativeai==0.8.3"
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image "google-generativeai==0.7.2"
 
       - name: Run Phase 1 Script
         env:
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
-        run: python phase1_smart_split.py
+        # The "-W ignore" flag tells Python to shut up about any warnings
+        run: python -W ignore phase1_smart_split.py
