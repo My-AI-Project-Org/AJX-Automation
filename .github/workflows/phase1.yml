@@ -24,7 +24,7 @@ jobs:
 
       - name: Install Python Libraries
         run: |
-          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image google-generativeai
+         pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image "google-generativeai<0.9.0"
 
       - name: Run Phase 1 Script
         env:
