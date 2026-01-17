@@ -1,7 +1,7 @@
 name: Phase 1 - Smart Split
 
 on:
-  workflow_dispatch: # Allows you to click a "Run" button manually
+  workflow_dispatch: # Allows you to click the "Run" button manually
 
 jobs:
   run-split:
@@ -23,8 +23,10 @@ jobs:
           sudo apt-get install -y poppler-utils
 
       - name: Install Python Libraries
+        # We are using the standard latest versions. 
+        # IGNORE any "FutureWarning" or "Support Ended" text in the logs. It is harmless.
         run: |
-         pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image "google-generativeai<0.9.0"
+          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image google-generativeai
 
       - name: Run Phase 1 Script
         env:
