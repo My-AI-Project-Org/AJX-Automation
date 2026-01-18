@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: RESUME & PROGRESS ENGINE   ║")
+print("║   AJX ULTIMATE: OAUTH USER MODE ACTIVE     ║")
 print("╚════════════════════════════════════════════╝")
 
 import os
@@ -8,7 +8,6 @@ import json
 import time
 import shutil
 import sys
-import math
 
 # Prints flush immediately
 def log(msg):
@@ -16,7 +15,8 @@ def log(msg):
     sys.stdout.flush()
 
 log("🔍 STEP 1: Importing Modules...")
-from google.oauth2 import service_account
+# 👇 THIS IS THE CHANGE: We import 'Credentials' for Users, not ServiceAccount
+from google.oauth2.credentials import Credentials 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import google.generativeai as genai
@@ -26,23 +26,22 @@ from pdf2image import convert_from_path, pdfinfo_from_path
 INPUT_FOLDER_NAME = 'AJX_Input'
 OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
 
-# --- PROGRESS BAR FUNCTION ---
+# --- PROGRESS BAR ---
 def print_main_bar(current_page, total_pages, status_msg="Processing"):
     percent = int((current_page / total_pages) * 100)
     length = 40
     filled_length = int(length * current_page // total_pages)
     bar = '█' * filled_length + '░' * (length - filled_length)
-    
-    # \r overwrites the line
-    sys.stdout.write(f'\r🏁 TOTAL PROGRESS: |{bar}| {percent}% ({current_page}/{total_pages}) | {status_msg}')
+    sys.stdout.write(f'\r🏁 PROGRESS: |{bar}| {percent}% ({current_page}/{total_pages}) | {status_msg}')
     sys.stdout.flush()
 
 # --- SETUP ---
 keys_json = os.environ.get("GEMINI_API_KEYS_LIST")
-creds_json = os.environ.get("GDRIVE_CREDENTIALS")
+# 👇 THIS IS THE NEW SECRET NAME
+oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
 
-if not keys_json or not creds_json:
-    log("\n❌ FATAL: Secrets missing.")
+if not keys_json or not oauth_json:
+    log("\n❌ FATAL: Secrets missing. Script expects 'GDRIVE_OAUTH_JSON'.")
     exit()
 
 try:
@@ -54,14 +53,16 @@ except:
 genai.configure(api_key=API_KEYS[0])
 model = genai.GenerativeModel('gemini-1.5-flash')
 
+# --- OAUTH CONNECTION (THE CRITICAL FIX) ---
 try:
-    creds_dict = json.loads(creds_json)
-    creds = service_account.Credentials.from_service_account_info(
-        creds_dict, scopes=['https://www.googleapis.com/auth/drive']
-    )
+    # Load the User Token we generated on laptop
+    token_info = json.loads(oauth_json)
+    # 👇 This line connects as YOU, not the Robot
+    creds = Credentials.from_authorized_user_info(token_info, ['https://www.googleapis.com/auth/drive'])
     service = build('drive', 'v3', credentials=creds)
+    log("✅ Authenticated as USER (Using your 15GB Storage)")
 except Exception as e:
-    log(f"❌ Drive Error: {e}")
+    log(f"❌ OAuth Error: {e}")
     exit()
 
 # --- HELPER FUNCTIONS ---
@@ -103,49 +104,32 @@ def download_latest_pdf(folder_id):
     return file_name
 
 def get_existing_progress_map(book_folder_id):
-    """
-    Scans Google Drive to see which pages are ALREADY uploaded.
-    Returns a set of page numbers: {1, 2, 3, ... 50}
-    """
-    log("🔍 Scanning Drive for existing progress (Resume Check)...")
+    log("🔍 Scanning Drive for existing progress...")
     done_pages = set()
-    
-    # List all chapter folders
     query = f"'{book_folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     chapters = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
-    
     for chap in chapters:
-        # List images in each chapter
         img_query = f"'{chap['id']}' in parents and mimeType = 'image/jpeg' and trashed = false"
         images = service.files().list(q=img_query, fields="files(name)").execute().get('files', [])
-        
         for img in images:
-            # Assume format "page_001.jpg"
             try:
                 name = img['name']
-                # Extract number from "page_055.jpg"
                 num_part = name.split('_')[1].split('.')[0]
                 done_pages.add(int(num_part))
             except:
                 continue
-                
-    log(f"✅ Found {len(done_pages)} pages already done. Resuming...")
+    log(f"✅ Found {len(done_pages)} pages done.")
     return done_pages
 
 def get_smart_chapters(pdf_path):
-    log("\n🧠 AI INDEX ANALYSIS (First 20 pages)...")
-    # Quick convert first 20 pages just for AI
+    log("\n🧠 AI INDEX ANALYSIS...")
     try:
         images = convert_from_path(pdf_path, first_page=1, last_page=20, dpi=100)
-    except:
-        return []
-
-    prompt = """
-    Analyze these images. Find the Table of Contents.
-    Identify the STARTING PDF PAGE INDEX (0-based) for each chapter.
-    Return strictly a JSON list: [{"name": "00_Preface", "start_index": 0}]
-    """
-    try:
+        prompt = """
+        Analyze these images. Find the Table of Contents.
+        Identify the STARTING PDF PAGE INDEX (0-based) for each chapter.
+        Return strictly a JSON list: [{"name": "00_Preface", "start_index": 0}]
+        """
         response = model.generate_content([prompt] + images)
         text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
@@ -157,7 +141,7 @@ def main():
     out_id = get_folder_id(OUTPUT_FOLDER_NAME)
     
     if not in_id or not out_id:
-        log("❌ Input/Output Folders not found.")
+        log("❌ Input/Output Folders not found. (Check 'AJX_Input' exists in YOUR Drive)")
         return
 
     pdf_name = download_latest_pdf(in_id)
@@ -165,46 +149,35 @@ def main():
         log("❌ No PDF found.")
         return
 
-    # 1. Setup Main Book Folder
     book_name = pdf_name.replace('.pdf', '')
     book_folder_id = create_folder(book_name, out_id)
     
-    # 2. Check Total Pages
     try:
         info = pdfinfo_from_path(pdf_name)
         total_pages = int(info["Pages"])
     except:
         total_pages = 500
     
-    # 3. Build Resume Map
     done_pages_set = get_existing_progress_map(book_folder_id)
     
-    # 4. Get Chapters (Once)
     chapters = get_smart_chapters(pdf_name)
     if not chapters: chapters = [{"name": "Full_Book", "start_index": 0}]
     
-    # Create Chapter Folders in Drive in Advance
-    log("📂 Pre-creating Chapter Folders...")
-    chapter_drive_ids = [] # List of (start_index, end_index, drive_id)
-    
+    log("📂 Pre-creating Folders...")
+    chapter_drive_ids = []
     for i, chap in enumerate(chapters):
         safe_name = "".join(c for c in chap['name'] if c.isalnum() or c in (' ', '_')).strip()[:30]
-        chap_name = f"{str(i+1).zfill(2)}_{safe_name}"
-        c_id = create_folder(chap_name, book_folder_id)
-        
+        c_id = create_folder(f"{str(i+1).zfill(2)}_{safe_name}", book_folder_id)
         start = int(chap['start_index'])
         end = int(chapters[i+1]['start_index']) if i < len(chapters)-1 else total_pages
         chapter_drive_ids.append({'start': start, 'end': end, 'id': c_id})
 
-    # 5. THE MAIN LOOP (Resume Supported)
-    log("\n🚀 STARTING ENGINE... (Press Ctrl+C to stop, it will resume next time)")
+    log("\n🚀 STARTING ENGINE... (OAuth User Mode)")
     
     chunk_size = 10
-    
     for i in range(1, total_pages + 1, chunk_size):
         last_page = min(i + chunk_size - 1, total_pages)
         
-        # Check if this WHOLE chunk is already done
         chunk_needed = False
         for p in range(i, last_page + 1):
             if p not in done_pages_set:
@@ -212,50 +185,37 @@ def main():
                 break
         
         if not chunk_needed:
-            print_main_bar(last_page, total_pages, status_msg="Skipping (Already Done) ⏭️")
+            print_main_bar(last_page, total_pages, "Skipping ⏭️")
             continue
 
-        # If we need to convert
-        print_main_bar(i, total_pages, status_msg="Converting... ⚙️")
+        print_main_bar(i, total_pages, "Converting ⚙️")
         try:
             images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
         except Exception as e:
-            log(f"\n❌ Error converting {i}-{last_page}: {e}")
+            log(f"\n❌ Conversion Error: {e}")
             break
 
-        # Upload Loop
         for idx, img in enumerate(images):
-            page_num = i + idx # Actual Page Number (1-based)
-            
-            # Skip if specific page is done
-            if page_num in done_pages_set:
-                continue
+            page_num = i + idx
+            if page_num in done_pages_set: continue
                 
-            # Find which chapter this page belongs to
-            target_folder_id = None
+            target_id = chapter_drive_ids[0]['id']
             for chap in chapter_drive_ids:
-                # Adjust 0-based index to 1-based page num check
                 if (page_num - 1) >= chap['start'] and (page_num - 1) < chap['end']:
-                    target_folder_id = chap['id']
+                    target_id = chap['id']
                     break
             
-            if not target_folder_id:
-                 # Fallback to first folder
-                 target_folder_id = chapter_drive_ids[0]['id']
-
-            # Save & Upload
             temp_name = f"page_{str(page_num).zfill(3)}.jpg"
             img.save(temp_name, "JPEG")
             
-            file_meta = {'name': temp_name, 'parents': [target_folder_id]}
+            file_meta = {'name': temp_name, 'parents': [target_id]}
             media = MediaFileUpload(temp_name, mimetype='image/jpeg')
             service.files().create(body=file_meta, media_body=media).execute()
+            os.remove(temp_name)
             
-            os.remove(temp_name) # Free Disk Space
-            
-        print_main_bar(last_page, total_pages, status_msg="Uploaded ✅")
+        print_main_bar(last_page, total_pages, "Uploaded ✅")
 
-    log("\n\n🎉 MISSION ACCOMPLISHED! ALL PAGES SYNCED.")
+    log("\n\n🎉 MISSION ACCOMPLISHED!")
 
 if __name__ == "__main__":
     main()
