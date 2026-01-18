@@ -1,0 +1,24 @@
+name: Phase 2 - Analyze & Index
+on: workflow_dispatch
+
+jobs:
+  analyze_book:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: |
+          pip install google-api-python-client google-auth-oauthlib google-generativeai pillow
+
+      - name: Run Phase 2 Script
+        env:
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+        run: python -u -W ignore phase2_analyze.py
