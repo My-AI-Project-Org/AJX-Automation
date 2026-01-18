@@ -28,7 +28,7 @@ jobs:
 
       - name: Run Phase 1 Script
         env:
-          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
         # The "-W ignore" flag tells Python to shut up about any warnings
         run: python -u -W ignore phase1_smart_split.py
