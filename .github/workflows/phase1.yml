@@ -1,34 +1,35 @@
-name: Phase 1 - Smart Split
+name: Phase 1 - Smart Split & Index
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # This allows the manual "Run Workflow" button
 
 jobs:
-  run-split:
+  run_smart_split:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-
-      - name: Install System Tools
+      - name: Install System Dependencies (Poppler for PDF)
         run: |
           sudo apt-get update
           sudo apt-get install -y poppler-utils
 
-      - name: Install Python Libraries
-        # We force version 0.7.2 because it is STABLE and has no warnings
-        run: |
-          pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib pdf2image "google-generativeai==0.7.2"
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
 
-      - name: Run Phase 1 Script
+      - name: Install Python Libraries
+        run: |
+          python -m pip install --upgrade pip
+          # 👇 WE ADDED 'google-generativeai' HERE
+          pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai
+
+      - name: Run Ultimate Script
         env:
+          # 👇 MAKE SURE BOTH SECRETS ARE CONNECTED
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
-        # The "-W ignore" flag tells Python to shut up about any warnings
         run: python -u -W ignore phase1_smart_split.py
