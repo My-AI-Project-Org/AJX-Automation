@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: DEBUG MODE (SHOWS REAL ERRORS)     ║")
+print("║   AJX ULTIMATE: ROBUST MATH & ERROR HANDLING       ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -8,7 +8,7 @@ import json
 import time
 import shutil
 import sys
-import traceback  # Added for detailed errors
+import re  # Import Regex for cleaning numbers
 
 # Google Libraries
 from google.oauth2.credentials import Credentials 
@@ -31,6 +31,27 @@ def print_bar(current, total, msg="Processing"):
     sys.stdout.write(f'\r🏁 {msg}: |{bar}| {percent}% ({current}/{total})')
     sys.stdout.flush()
 
+# --- HELPER: CLEAN PAGE NUMBERS (THE FIX) ---
+def clean_page_num(value, default=1):
+    """
+    Forces 'B9', 'Page 10', 'iv' into a simple integer.
+    """
+    if isinstance(value, int): return value
+    
+    # 1. Try simple conversion
+    try:
+        return int(str(value).strip())
+    except:
+        pass
+    
+    # 2. Extract digits only (e.g., "B9" -> 9)
+    digits = re.findall(r'\d+', str(value))
+    if digits:
+        return int(digits[0])
+    
+    # 3. If totally failed, return default
+    return default
+
 # --- AUTHENTICATION ---
 keys_json = os.environ.get("GEMINI_API_KEYS_LIST")
 oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
@@ -43,7 +64,7 @@ try:
     API_KEYS = json.loads(keys_json)
     if not isinstance(API_KEYS, list): API_KEYS = [keys_json]
     genai.configure(api_key=API_KEYS[0])
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except Exception as e:
     log(f"❌ Gemini Setup Error: {e}")
     exit()
@@ -108,46 +129,62 @@ def analyze_and_upload_json(pdf_name, total_pages, book_folder_id, json_name):
     log("\n🧠 STARTING AI ANALYSIS (Generating Index)...")
     
     try:
-        # 1. TEST CONVERSION
-        log("   -> Converting first 20 pages to images...")
+        # Convert first 20 pages for AI
         images = convert_from_path(pdf_name, first_page=1, last_page=20, dpi=100)
-        log("   -> Conversion success. Sending to Gemini...")
         
         prompt = """
         Analyze these images. Find the Table of Contents.
-        Create a DETAILED JSON map of the book with Chapters and Subtopics.
+        Create a DETAILED JSON map of the book.
         OUTPUT FORMAT (Strict JSON):
         [{"chapter_name": "Unit 1", "start_page": 5, "subtopics": []}]
-        RULES: Return ONLY valid JSON.
+        RULES: 
+        1. If page is 'B9', just return 9.
+        2. Return ONLY valid JSON.
         """
         
         response = model.generate_content([prompt] + images)
-        log("   -> Gemini responded. Parsing JSON...")
-        
         clean_text = response.text.replace("```json", "").replace("```", "").strip()
         toc_data = json.loads(clean_text)
         
     except Exception as e:
-        # 👇 THIS IS THE NEW PART THAT WILL SHOW US THE ERROR
-        log(f"\n❌ AI ANALYSIS CRASHED: {e}")
-        log(f"❌ DETAILED TRACEBACK: {traceback.format_exc()}")
-        if 'response' in locals() and hasattr(response, 'text'):
-            log(f"❌ RAW MODEL RESPONSE: {response.text}")
-        
-        log("⚠️ Using Default Index (Full Book) due to error.")
+        log(f"⚠️ AI Analysis failed ({e}). Using Default Index.")
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    # Math Logic
-    log("Cc Calculating Page Ranges...")
+    # --- MATH LOGIC WITH CLEANING ---
+    log("Cc Calculating Page Ranges (Safe Mode)...")
+    
+    # Sort just in case AI returned them out of order
+    # Use clean_page_num to avoid sorting errors
+    try:
+        toc_data.sort(key=lambda x: clean_page_num(x.get('start_page', 0)))
+    except:
+        pass # If sorting fails, just use original order
+
     for i, chap in enumerate(toc_data):
-        start = int(chap.get('start_page', 1))
+        # 👇 HERE IS THE FIX: We clean the number before using it
+        start = clean_page_num(chap.get('start_page', 1))
+        
         if i < len(toc_data) - 1:
-            next_start = int(toc_data[i+1].get('start_page', start))
+            next_start = clean_page_num(toc_data[i+1].get('start_page', start))
             end = max(start, next_start - 1)
         else:
             end = total_pages
+        
         chap['start_page'] = start
         chap['end_page'] = end
+
+        # Clean subtopics too
+        subs = chap.get('subtopics', [])
+        for j, sub in enumerate(subs):
+            s_start = clean_page_num(sub.get('start_page', start))
+            if j < len(subs) - 1:
+                s_next = clean_page_num(subs[j+1].get('start_page', s_start))
+                s_end = max(s_start, s_next - 1)
+            else:
+                s_end = end
+            sub['start_page'] = s_start
+            sub['end_page'] = s_end
+            sub['range'] = f"{s_start}-{s_end}"
 
     # Upload
     with open(json_name, 'w', encoding='utf-8') as f:
@@ -183,11 +220,70 @@ def main():
     
     book_folder_id = create_folder(book_name, out_id)
     
-    # FORCE RE-RUN AI: We assume if the user is running this, they want to fix the Index.
-    # So we ignore 'json_exists' check for this debug run.
-    toc_data = analyze_and_upload_json(pdf_name, 500, book_folder_id, json_name)
+    # CHECK STATUS
+    json_exists = check_json_exists(book_folder_id, json_name)
+    
+    # We will FORCE generate JSON if it failed last time (meaning it exists but might be corrupt or incomplete)
+    # But for safety, let's just run logic:
+    
+    try:
+        info = pdfinfo_from_path(pdf_name)
+        total_pages = int(info["Pages"])
+    except:
+        total_pages = 500
 
-    log("\n🎉 DEBUG RUN COMPLETE. CHECK LOGS ABOVE FOR RED ERRORS!")
+    if json_exists:
+        log("✅ Index JSON already exists.")
+        # Optional: Download it to check chapters? For now we skip.
+        toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "end_page": total_pages}]
+    else:
+        toc_data = analyze_and_upload_json(pdf_name, total_pages, book_folder_id, json_name)
+
+    # CHECK IMAGES
+    if check_images_exist(book_folder_id):
+        log("✅ Images already exist. Job Done.")
+        return
+
+    log("\n🚀 STARTING IMAGE CONVERSION...")
+    
+    # Create Folders
+    chapter_drive_ids = []
+    # If toc_data is just the dummy, we try to load the real one if possible, else default
+    # (Simplified for stability)
+    for i, chap in enumerate(toc_data):
+        safe_name = "".join(c for c in chap['chapter_name'] if c.isalnum() or c in (' ', '_')).strip()[:30]
+        c_id = create_folder(f"{str(i+1).zfill(2)}_{safe_name}", book_folder_id)
+        chapter_drive_ids.append({'start': int(chap['start_page']), 'end': int(chap['end_page']), 'id': c_id})
+
+    # Conversion Loop
+    chunk_size = 10
+    for i in range(1, total_pages + 1, chunk_size):
+        last_page = min(i + chunk_size - 1, total_pages)
+        print_bar(i, total_pages, "Converting")
+        
+        try:
+            images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
+        except:
+            continue
+
+        for idx, img in enumerate(images):
+            page_num = i + idx
+            
+            target_id = chapter_drive_ids[0]['id']
+            for chap in chapter_drive_ids:
+                if (page_num) >= chap['start'] and (page_num) <= chap['end']:
+                    target_id = chap['id']
+                    break
+            
+            temp_name = f"page_{str(page_num).zfill(3)}.jpg"
+            img.save(temp_name, "JPEG")
+            
+            file_meta = {'name': temp_name, 'parents': [target_id]}
+            media = MediaFileUpload(temp_name, mimetype='image/jpeg')
+            service.files().create(body=file_meta, media_body=media).execute()
+            os.remove(temp_name)
+
+    log("\n\n🎉 FULL SUCCESS!")
 
 if __name__ == "__main__":
     main()
