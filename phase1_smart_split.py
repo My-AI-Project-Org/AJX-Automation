@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: SMART CHECK + INDEXING + IMAGES    ║")
+print("║   AJX ULTIMATE: DEBUG MODE (SHOWS REAL ERRORS)     ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -8,6 +8,7 @@ import json
 import time
 import shutil
 import sys
+import traceback  # Added for detailed errors
 
 # Google Libraries
 from google.oauth2.credentials import Credentials 
@@ -20,7 +21,6 @@ from pdf2image import convert_from_path, pdfinfo_from_path
 INPUT_FOLDER_NAME = 'AJX_Input'
 OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
 
-# --- LOGGING HELPER ---
 def log(msg):
     print(msg)
     sys.stdout.flush()
@@ -44,8 +44,8 @@ try:
     if not isinstance(API_KEYS, list): API_KEYS = [keys_json]
     genai.configure(api_key=API_KEYS[0])
     model = genai.GenerativeModel('gemini-1.5-flash')
-except:
-    log("❌ Gemini Error.")
+except Exception as e:
+    log(f"❌ Gemini Setup Error: {e}")
     exit()
 
 try:
@@ -96,12 +96,9 @@ def check_json_exists(folder_id, json_name):
     return len(results.get('files', [])) > 0
 
 def check_images_exist(folder_id):
-    # Checks if there are ANY subfolders (chapters) with images
     query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     chapters = service.files().list(q=query, fields="files(id)").execute().get('files', [])
     if not chapters: return False
-    
-    # Check inside first chapter
     c_id = chapters[0]['id']
     img_query = f"'{c_id}' in parents and mimeType = 'image/jpeg' and trashed = false"
     imgs = service.files().list(q=img_query, pageSize=1, fields="files(id)").execute().get('files', [])
@@ -110,36 +107,37 @@ def check_images_exist(folder_id):
 def analyze_and_upload_json(pdf_name, total_pages, book_folder_id, json_name):
     log("\n🧠 STARTING AI ANALYSIS (Generating Index)...")
     
-    # Convert first 20 pages for AI
-    images = convert_from_path(pdf_name, first_page=1, last_page=20, dpi=100)
-    
-    prompt = """
-    Analyze these images. Find the Table of Contents.
-    Create a DETAILED JSON map of the book with Chapters and Subtopics.
-    
-    OUTPUT FORMAT (Strict JSON):
-    [
-      {
-        "chapter_name": "Unit 1: Ancient History",
-        "start_page": 5,
-        "subtopics": [
-           {"name": "Stone Age", "start_page": 5},
-           {"name": "Indus Valley", "start_page": 12}
-        ]
-      }
-    ]
-    RULES: Return ONLY valid JSON. If no Index found, return full book range.
-    """
-    
     try:
+        # 1. TEST CONVERSION
+        log("   -> Converting first 20 pages to images...")
+        images = convert_from_path(pdf_name, first_page=1, last_page=20, dpi=100)
+        log("   -> Conversion success. Sending to Gemini...")
+        
+        prompt = """
+        Analyze these images. Find the Table of Contents.
+        Create a DETAILED JSON map of the book with Chapters and Subtopics.
+        OUTPUT FORMAT (Strict JSON):
+        [{"chapter_name": "Unit 1", "start_page": 5, "subtopics": []}]
+        RULES: Return ONLY valid JSON.
+        """
+        
         response = model.generate_content([prompt] + images)
-        text = response.text.replace("```json", "").replace("```", "").strip()
-        toc_data = json.loads(text)
-    except:
-        log("⚠️ AI Analysis failed. Creating default index.")
+        log("   -> Gemini responded. Parsing JSON...")
+        
+        clean_text = response.text.replace("```json", "").replace("```", "").strip()
+        toc_data = json.loads(clean_text)
+        
+    except Exception as e:
+        # 👇 THIS IS THE NEW PART THAT WILL SHOW US THE ERROR
+        log(f"\n❌ AI ANALYSIS CRASHED: {e}")
+        log(f"❌ DETAILED TRACEBACK: {traceback.format_exc()}")
+        if 'response' in locals() and hasattr(response, 'text'):
+            log(f"❌ RAW MODEL RESPONSE: {response.text}")
+        
+        log("⚠️ Using Default Index (Full Book) due to error.")
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    # Math Logic for End Pages
+    # Math Logic
     log("Cc Calculating Page Ranges...")
     for i, chap in enumerate(toc_data):
         start = int(chap.get('start_page', 1))
@@ -148,21 +146,8 @@ def analyze_and_upload_json(pdf_name, total_pages, book_folder_id, json_name):
             end = max(start, next_start - 1)
         else:
             end = total_pages
-        
         chap['start_page'] = start
         chap['end_page'] = end
-        
-        subs = chap.get('subtopics', [])
-        for j, sub in enumerate(subs):
-            s_start = int(sub.get('start_page', start))
-            if j < len(subs) - 1:
-                s_next = int(subs[j+1].get('start_page', s_start))
-                s_end = max(s_start, s_next - 1)
-            else:
-                s_end = end
-            sub['start_page'] = s_start
-            sub['end_page'] = s_end
-            sub['range'] = f"{s_start}-{s_end}"
 
     # Upload
     with open(json_name, 'w', encoding='utf-8') as f:
@@ -196,82 +181,13 @@ def main():
     
     log(f"📘 Processing: {book_name}")
     
-    # 1. Get/Create Book Folder
     book_folder_id = create_folder(book_name, out_id)
     
-    # 2. CHECK STATUS
-    json_exists = check_json_exists(book_folder_id, json_name)
-    images_exist = check_images_exist(book_folder_id)
-    
-    try:
-        info = pdfinfo_from_path(pdf_name)
-        total_pages = int(info["Pages"])
-    except:
-        total_pages = 500
+    # FORCE RE-RUN AI: We assume if the user is running this, they want to fix the Index.
+    # So we ignore 'json_exists' check for this debug run.
+    toc_data = analyze_and_upload_json(pdf_name, 500, book_folder_id, json_name)
 
-    toc_data = []
-
-    # --- STEP A: HANDLE JSON ---
-    if json_exists:
-        log("✅ Index JSON already exists. Skipping analysis.")
-        # We need to download it to memory if we plan to use it for folders (optional)
-        # For now, we only need it if we are converting images.
-    else:
-        toc_data = analyze_and_upload_json(pdf_name, total_pages, book_folder_id, json_name)
-
-    # --- STEP B: HANDLE IMAGES ---
-    if images_exist:
-        log("✅ Images already exist in Drive. Skipping conversion.")
-        log("\n🎉 JOB DONE: PDF checked, JSON verified/created.")
-        return
-
-    log("\n🚀 IMAGES MISSING -> STARTING CONVERSION ENGINE...")
-    
-    # If we didn't generate TOC just now, we need to generate it or use default logic for folders
-    if not toc_data:
-         # Quick re-run of basic logic if we skipped Step A but need data for Step B
-         # Or simpler: just download the existing JSON. 
-         # For robustness, let's just re-analyze quickly or use a simple fallback for folders
-         log("⚠️ Loading folder structure...")
-         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "end_page": total_pages}]
-
-    # Create Smart Folders
-    chapter_drive_ids = []
-    for i, chap in enumerate(toc_data):
-        safe_name = "".join(c for c in chap['chapter_name'] if c.isalnum() or c in (' ', '_')).strip()[:30]
-        c_id = create_folder(f"{str(i+1).zfill(2)}_{safe_name}", book_folder_id)
-        chapter_drive_ids.append({'start': int(chap['start_page']), 'end': int(chap['end_page']), 'id': c_id})
-
-    # Conversion Loop
-    chunk_size = 10
-    for i in range(1, total_pages + 1, chunk_size):
-        last_page = min(i + chunk_size - 1, total_pages)
-        print_bar(i, total_pages, "Converting")
-        
-        try:
-            images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
-        except:
-            continue
-
-        for idx, img in enumerate(images):
-            page_num = i + idx
-            
-            # Find Folder
-            target_id = chapter_drive_ids[0]['id']
-            for chap in chapter_drive_ids:
-                if (page_num) >= chap['start'] and (page_num) <= chap['end']:
-                    target_id = chap['id']
-                    break
-            
-            temp_name = f"page_{str(page_num).zfill(3)}.jpg"
-            img.save(temp_name, "JPEG")
-            
-            file_meta = {'name': temp_name, 'parents': [target_id]}
-            media = MediaFileUpload(temp_name, mimetype='image/jpeg')
-            service.files().create(body=file_meta, media_body=media).execute()
-            os.remove(temp_name)
-
-    log("\n\n🎉 FULL SUCCESS!")
+    log("\n🎉 DEBUG RUN COMPLETE. CHECK LOGS ABOVE FOR RED ERRORS!")
 
 if __name__ == "__main__":
     main()
