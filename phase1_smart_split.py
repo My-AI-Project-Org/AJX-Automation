@@ -1,6 +1,6 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: HD NESTED HIERARCHY PARSER         ║")
-print("║   (300 DPI + Strict Structure + Correct Math)      ║")
+print("║   AJX ULTIMATE: INFINITE RECURSION EDITION         ║")
+print("║   (Supports 3+ Levels of Nesting Automatically)    ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -22,7 +22,6 @@ from PIL import Image, ImageDraw, ImageFont
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
 OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
-# User Input: "25" or "25-27"
 USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
 def log(msg):
@@ -41,15 +40,15 @@ def print_bar(current, total, msg="Processing"):
 def clean_page_num(value, default=1):
     if isinstance(value, int): return value
     try:
-        hindi_digits = str(value).maketrans("०१२३४५६७८९", "0123456789")
-        cleaned = str(value).translate(hindi_digits)
-        # Fix common OCR errors: "B9"->9, "Page 9"->9, "l5"->15
-        cleaned = cleaned.replace("l", "1").replace("O", "0").replace("o", "0")
+        cleaned = str(value).replace("l", "1").replace("O", "0").replace("o", "0")
         digits = re.findall(r'\d+', cleaned)
         if digits: return int(digits[0])
     except:
         pass
     return default
+
+def clean_filename(name):
+    return "".join(c for c in name if c.isalnum() or c in (' ', '_', '-')).strip()[:40]
 
 # --- AUTH ---
 keys_json = os.environ.get("GEMINI_API_KEYS_LIST")
@@ -63,7 +62,7 @@ try:
     API_KEYS = json.loads(keys_json)
     if not isinstance(API_KEYS, list): API_KEYS = [keys_json]
     genai.configure(api_key=API_KEYS[0])
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except:
     log("❌ Gemini Error")
     exit()
@@ -97,9 +96,9 @@ def download_latest_pdf(folder_id):
     results = service.files().list(q=query, orderBy='createdTime desc', pageSize=1).execute()
     items = results.get('files', [])
     if not items: return None, None
-    file_id = items[0]['id']
-    file_name = items[0]['name']
-    
+    return items[0]['name'], items[0]['id']
+
+def perform_download(file_id, file_name):
     log(f"⬇️ Downloading PDF: {file_name}...")
     request = service.files().get_media(fileId=file_id)
     fh = io.FileIO(file_name, 'wb')
@@ -107,7 +106,6 @@ def download_latest_pdf(folder_id):
     done = False
     while not done: status, done = downloader.next_chunk()
     fh.close() 
-    return file_name, file_id
 
 def check_json_exists(folder_id, json_name):
     query = f"name = '{json_name}' and '{folder_id}' in parents and trashed = false"
@@ -118,10 +116,7 @@ def check_images_exist(folder_id):
     query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     chapters = service.files().list(q=query, fields="files(id)").execute().get('files', [])
     if not chapters: return False
-    c_id = chapters[0]['id']
-    img_query = f"'{c_id}' in parents and mimeType = 'image/jpeg' and trashed = false"
-    imgs = service.files().list(q=img_query, pageSize=1, fields="files(id)").execute().get('files', [])
-    return len(imgs) > 0
+    return True
 
 def download_json(folder_id, json_name):
     query = f"name = '{json_name}' and '{folder_id}' in parents and trashed = false"
@@ -141,7 +136,6 @@ def cleanup_previews(folder_id):
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get('files', [])
     if files:
-        log(f"🧹 Cleaning up {len(files)} temp files...")
         for f in files:
             try: service.files().delete(fileId=f['id']).execute()
             except: pass
@@ -166,18 +160,15 @@ def create_collage(image_list, labels, output_name):
     return output_name
 
 def find_and_preview_index(pdf_name, book_folder_id):
-    log("\n🕵️ MODE 1: SCOUTING FOR INDEX (TOP 4 CANDIDATES)...")
+    log("\n🕵️ MODE 1: SCOUTING FOR INDEX...")
     images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
-    
-    prompt = """Identify TOP 4 pages that look like the Table of Contents (Index).
-    Output JSON: {"candidate_pages": [5, 22, 25, 26]}"""
+    prompt = """Identify TOP 4 pages that look like the Table of Contents.
+    Output JSON: {"candidate_pages": [5, 6]}"""
     try:
         response = model.generate_content([prompt] + images[:30])
         text = response.text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(text)
-        candidate_pages = data.get('candidate_pages', [])
-    except:
-        candidate_pages = [1, 2, 3, 4]
+        candidate_pages = json.loads(text).get('candidate_pages', [1,2,3,4])
+    except: candidate_pages = [1, 2, 3, 4]
 
     if not candidate_pages: candidate_pages = [1, 2, 3, 4]
     candidate_pages = list(dict.fromkeys(candidate_pages))[:4]
@@ -196,108 +187,108 @@ def find_and_preview_index(pdf_name, book_folder_id):
         file_meta = {'name': preview_name, 'parents': [book_folder_id]}
         media = MediaFileUpload(preview_name, mimetype='image/jpeg')
         file = service.files().create(body=file_meta, media_body=media, fields='id, webViewLink').execute()
-        link = file.get('webViewLink')
         log("\n" + "="*60)
-        log(f"🔗 CLICK THIS LINK TO SEE THE CANDIDATES:")
-        log(f"👉 {link}")
+        log(f"🔗 CLICK LINK: {file.get('webViewLink')}")
         log("="*60 + "\n")
-    else:
-        log("❌ Error creating collage.")
 
-# --- MODE 2: NESTED STRUCTURE BUILDER ---
+# --- 🔄 RECURSIVE MATH FUNCTION ---
+def calculate_ranges_recursive(node_list, end_limit):
+    """
+    Recursively calculates start/end pages for infinite nesting.
+    """
+    node_list.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
+    
+    for i, node in enumerate(node_list):
+        start_p = clean_page_num(node.get('start_page', 1))
+        
+        # Calculate End Page based on Next Sibling
+        if i < len(node_list) - 1:
+            next_p = clean_page_num(node_list[i+1].get('start_page', start_p))
+            end_p = max(start_p, next_p - 1)
+        else:
+            end_p = end_limit # Last sibling goes to limit
+            
+        node['start_page'] = start_p
+        node['end_page'] = end_p
+        node['range'] = f"{start_p}-{end_p}"
+        
+        # RECURSION: If children exist, process them
+        if node.get('subtopics'):
+            # Children must fit within Parent's range
+            calculate_ranges_recursive(node['subtopics'], end_p)
+
+# --- 🔄 RECURSIVE FOLDER CREATOR ---
+def create_folders_recursive(node_list, parent_folder_id, map_list):
+    """
+    Recursively creates folders and populates the map.
+    """
+    for i, node in enumerate(node_list):
+        # 1. Create Folder
+        folder_name = f"{str(i+1).zfill(2)}_{clean_filename(node['chapter_name'])}"
+        fid = create_folder(folder_name, parent_folder_id)
+        
+        # 2. Check for Children
+        if node.get('subtopics'):
+            # This is a Parent Node (Container) -> Recurse deeper
+            create_folders_recursive(node['subtopics'], fid, map_list)
+        else:
+            # This is a Leaf Node (Content) -> Add to Map for Images
+            map_list.append({
+                'start': int(node['start_page']),
+                'end': int(node['end_page']),
+                'id': fid,
+                'name': node['chapter_name']
+            })
+
 def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
     cleanup_previews(book_folder_id)
-    log(f"\n🏗️ MODE 2: BUILDING NESTED INDEX FROM RANGE '{input_str}'...")
+    log(f"\n🏗️ MODE 2: BUILDING DEEP NESTED INDEX FROM RANGE '{input_str}'...")
     
-    pages_to_read = []
     if "-" in input_str:
-        start_s, end_s = input_str.split("-")
-        start = int(start_s.strip())
-        end = int(end_s.strip())
+        start, end = map(int, input_str.split("-"))
         pages_to_read = list(range(start, end + 1))
     else:
         pages_to_read = [int(input_str.strip())]
     
-    chunk_start = min(pages_to_read)
-    chunk_end = max(pages_to_read)
-    
-    # 🌟 KEY 1: HIGH RES SCAN (300 DPI)
-    log("   -> Scanning pages at 300 DPI (High Definition)...")
+    chunk_start, chunk_end = min(pages_to_read), max(pages_to_read)
     images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=300)
     
-    # 🌟 KEY 2: PROMPT FOR NESTED STRUCTURE
+    # 🌟 NEW PROMPT: 3-LEVEL DEEP DETECTION 🌟
     prompt = """
-    You are converting a Book Index into JSON.
-    The layout has Main Units (Bold/Red Headers) and Sub-Chapters (Numbered lists).
+    Analyze the Table of Contents. DETECT DEEP HIERARCHY.
+    Look for:
+    1. Main Units (Bold/Large)
+    2. Chapters (Numbered 1, 2, 3)
+    3. Topics (Indented or a, b, c) -> Nest these INSIDE Chapters!
     
-    TASK:
-    Create a HIERARCHICAL JSON.
-    - Treat Main Headers (e.g. "I. Ancient History") as Parent objects.
-    - Treat the lists below them as "subtopics".
-    - Do NOT Flatten. Keep the tree structure.
-    
-    EXAMPLE OUTPUT:
+    Output JSON (Recursive):
     [
       {
-        "chapter_name": "I. Ancient History",
-        "start_page": 9,
+        "chapter_name": "Unit I",
+        "start_page": 1,
         "subtopics": [
-           {"chapter_name": "1. Stone Age", "start_page": 9},
-           {"chapter_name": "2. Indus Valley", "start_page": 16}
+           {
+             "chapter_name": "Stone Age", 
+             "start_page": 5, 
+             "subtopics": [
+                 {"chapter_name": "Paleolithic", "start_page": 5},
+                 {"chapter_name": "Mesolithic", "start_page": 8}
+             ]
+           }
         ]
       }
     ]
-    
-    RULES:
-    1. Read EVERYTHING. Be exhaustive. Do not miss any chapter.
-    2. Convert page numbers (e.g. 'B9' -> 9).
-    3. Return valid JSON only.
     """
     
     try:
         response = model.generate_content([prompt] + images)
         text = response.text.replace("```json", "").replace("```", "").strip()
         toc_data = json.loads(text)
-    except Exception as e:
-        log(f"⚠️ AI Failed to read index: {e}")
+    except:
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    log("Cc Calculating Nested Ranges...")
-    
-    # 🌟 KEY 3: NESTED MATH LOGIC
-    toc_data.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
-    
-    for i, chap in enumerate(toc_data):
-        start_p = clean_page_num(chap.get('start_page', 1))
-        
-        # 1. Main Unit End Page
-        if i < len(toc_data) - 1:
-            next_p = clean_page_num(toc_data[i+1].get('start_page', start_p))
-            end_p = max(start_p, next_p - 1)
-        else:
-            end_p = total_pages
-            
-        chap['start_page'] = start_p
-        chap['end_page'] = end_p
-        
-        # 2. Subtopic End Pages
-        subs = chap.get('subtopics', [])
-        if subs:
-            subs.sort(key=lambda x: clean_page_num(x.get('start_page', start_p)))
-            for j, sub in enumerate(subs):
-                s_start = clean_page_num(sub.get('start_page', start_p))
-                
-                # Look at NEXT subtopic
-                if j < len(subs) - 1:
-                    s_next = clean_page_num(subs[j+1].get('start_page', s_start))
-                    s_end = max(s_start, s_next - 1)
-                else:
-                    # Last subtopic ends at Unit End
-                    s_end = end_p
-                
-                sub['start_page'] = s_start
-                sub['end_page'] = s_end
-                sub['range'] = f"{s_start}-{s_end}"
+    log("Cc Calculating Recursive Ranges...")
+    calculate_ranges_recursive(toc_data, total_pages)
 
     with open(json_name, 'w', encoding='utf-8') as f:
         json.dump(toc_data, f, indent=4, ensure_ascii=False)
@@ -324,74 +315,48 @@ def main():
     toc_data = []
     
     if check_json_exists(book_folder_id, json_name):
-        log("✅ Index JSON found in Drive.")
+        log("✅ JSON found.")
         toc_data = download_json(book_folder_id, json_name)
     else:
+        perform_download(pdf_id, pdf_name)
         if not USER_INPUT_STR:
             find_and_preview_index(pdf_name, book_folder_id)
-            log("\n🛑 STOPPING. Check the Collage Link above.")
+            log("\n🛑 STOPPING. Check Link.")
             return
         else:
-            try:
-                info = pdfinfo_from_path(pdf_name)
-                total_pages = int(info["Pages"])
-            except:
-                total_pages = 500
-            
+            try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
+            except: total_pages = 500
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
+    # 2. RECURSIVE FOLDER CREATION
+    log("\n📂 Building Deep Nested Folder Structure...")
+    chapter_map = [] 
+    create_folders_recursive(toc_data, book_folder_id, chapter_map)
+
+    # 3. CONVERT & UPLOAD
     if check_images_exist(book_folder_id):
-        log("✅ Images already exist. Job Done.")
-        return
+        log("✅ Images likely exist.")
+    else:
+        if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
+        log("\n🚀 STARTING IMAGE CONVERSION...")
+        try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
+        except: total_pages = 500
 
-    if not toc_data: return
+        stats = {c['id']: {'count': 0, 'expected': c['end'] - c['start'] + 1} for c in chapter_map}
+        chunk_size = 10
+        
+        for i in range(1, total_pages + 1, chunk_size):
+            last_page = min(i + chunk_size - 1, total_pages)
+            print_bar(i, total_pages, "Converting")
+            try: images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
+            except: continue
 
-    log("\n🚀 STARTING IMAGE CONVERSION...")
-    try:
-        info = pdfinfo_from_path(pdf_name)
-        total_pages = int(info["Pages"])
-    except:
-        total_pages = 500
-
-    # Flatten logic only for FOLDER CREATION (Keep JSON Nested)
-    chapter_ids = []
-    flat_list = []
-    for chap in toc_data:
-        if chap.get('subtopics'):
-            flat_list.extend(chap['subtopics'])
-        else:
-            flat_list.append(chap)
-            
-    for i, chap in enumerate(flat_list):
-        safe_name = "".join(c for c in chap['chapter_name'] if c.isalnum() or c in (' ', '_')).strip()[:30]
-        c_id = create_folder(f"{str(i+1).zfill(2)}_{safe_name}", book_folder_id)
-        chapter_ids.append({'start': int(chap['start_page']), 'end': int(chap['end_page']), 'id': c_id})
-
-    chunk_size = 10
-    for i in range(1, total_pages + 1, chunk_size):
-        last_page = min(i + chunk_size - 1, total_pages)
-        print_bar(i, total_pages, "Converting")
-        try:
-            images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
-        except: continue
-
-        for idx, img in enumerate(images):
-            page_num = i + idx
-            target_id = chapter_ids[0]['id']
-            # Find best match
-            for chap in chapter_ids:
-                if page_num >= chap['start'] and page_num <= chap['end']:
-                    target_id = chap['id']
-                    break 
-            
-            temp_name = f"page_{str(page_num).zfill(3)}.jpg"
-            img.save(temp_name, "JPEG")
-            file_meta = {'name': temp_name, 'parents': [target_id]}
-            media = MediaFileUpload(temp_name, mimetype='image/jpeg')
-            service.files().create(body=file_meta, media_body=media).execute()
-            os.remove(temp_name)
-
-    log("\n🎉 FULL SUCCESS!")
-
-if __name__ == "__main__":
-    main()
+            for idx, img in enumerate(images):
+                page_num = i + idx
+                
+                # Find Target in Map
+                target = None
+                start_page_of_chapter = 0
+                
+                for chap in chapter_map:
+                    if page
