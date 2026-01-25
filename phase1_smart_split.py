@@ -1,5 +1,6 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: I/O FIX + PRIORITY JSON            ║")
+print("║   AJX ULTIMATE: SMART COLLAGE SCOUT                ║")
+print("║   (Shows Top 4 Candidates in One Image)            ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -16,6 +17,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import google.generativeai as genai
 from pdf2image import convert_from_path, pdfinfo_from_path
+# Image Manipulation for Collage
+from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
@@ -92,7 +95,6 @@ def download_latest_pdf(folder_id):
     results = service.files().list(q=query, orderBy='createdTime desc', pageSize=1).execute()
     items = results.get('files', [])
     if not items: return None, None
-    
     file_id = items[0]['id']
     file_name = items[0]['name']
     
@@ -101,16 +103,10 @@ def download_latest_pdf(folder_id):
     fh = io.FileIO(file_name, 'wb')
     downloader = MediaIoBaseDownload(fh, request)
     done = False
-    while not done:
-        status, done = downloader.next_chunk()
-    
-    # 👇 THIS WAS THE MISSING LINE causing the error!
+    while not done: status, done = downloader.next_chunk()
     fh.close() 
-    log("✅ Download Complete.")
-    
     return file_name, file_id
 
-# --- CHECKS ---
 def check_json_exists(folder_id, json_name):
     query = f"name = '{json_name}' and '{folder_id}' in parents and trashed = false"
     results = service.files().list(q=query, fields="files(id)").execute()
@@ -138,46 +134,75 @@ def download_json(folder_id, json_name):
     fh.seek(0)
     return json.load(fh)
 
-# --- MODE 1: FIND & GENERATE LINK ---
+# --- COLLAGE CREATOR ---
+def create_collage(image_list, labels, output_name):
+    # Create a 2x2 grid (or 1x4 if easier)
+    # Resize all to 600px width for preview
+    thumbnails = []
+    for img in image_list:
+        thumb = img.copy()
+        thumb.thumbnail((600, 800))
+        thumbnails.append(thumb)
+    
+    # Create canvas
+    w, h = thumbnails[0].size
+    grid_img = Image.new('RGB', (w*2 + 20, h*2 + 20), (255, 255, 255))
+    
+    # Load default font or simple drawing
+    draw = ImageDraw.Draw(grid_img)
+    
+    positions = [(0,0), (w+10, 0), (0, h+10), (w+10, h+10)]
+    
+    for i, thumb in enumerate(thumbnails):
+        if i >= 4: break
+        pos = positions[i]
+        grid_img.paste(thumb, pos)
+        
+        # Draw Red Box & Text
+        draw.rectangle([pos[0], pos[1], pos[0]+120, pos[1]+50], fill="red")
+        draw.text((pos[0]+10, pos[1]+10), f"Page {labels[i]}", fill="white")
+        
+    grid_img.save(output_name)
+    return output_name
+
+# --- MODE 1: FIND & PREVIEW (COLLAGE MODE) ---
 def find_and_preview_index(pdf_name, book_folder_id):
-    log("\n🕵️ MODE 1: SCOUTING FOR INDEX PAGE...")
+    log("\n🕵️ MODE 1: SCOUTING FOR INDEX (TOP 4 CANDIDATES)...")
     log("   -> Scanning first 50 pages...")
     
-    # Now that fh.close() is added, this line will work!
-    images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=150)
+    images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
     
     prompt = """
-    Look at these images. Identify the 'Table of Contents' (Index/Vishay Suchi).
-    Return the EXACT Page Number where it starts.
-    Output JSON: {"found_page": 25}
-    If not found, return {"found_page": null}
+    Identify the TOP 4 pages that look most like a Table of Contents (Index, Vishay Suchi).
+    Return a list of their Page Numbers.
+    Output JSON: {"candidate_pages": [5, 22, 25, 26]}
     """
     
-    found_page = 1
+    candidate_pages = []
     try:
         response = model.generate_content([prompt] + images[:30])
         text = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(text)
-        found_page = data.get('found_page')
-        if not found_page: raise Exception("Next batch")
+        candidate_pages = data.get('candidate_pages', [])
     except:
-        try:
-            response = model.generate_content([prompt] + images[30:])
-            text = response.text.replace("```json", "").replace("```", "").strip()
-            data = json.loads(text)
-            found_page = data.get('found_page')
-        except:
-            found_page = 1
+        candidate_pages = [1, 2, 3, 4] # Fallback
             
-    if not found_page: found_page = 1
-    found_page = int(found_page)
-
-    log(f"📸 AI thinks Index is on Page: {found_page}")
+    if not candidate_pages: candidate_pages = [1, 2, 3, 4]
     
-    img_index = found_page - 1
-    if img_index < len(images):
-        preview_name = f"PREVIEW_INDEX_PAGE_{found_page}.jpg"
-        images[img_index].save(preview_name)
+    # Limit to 4 unique pages
+    candidate_pages = list(dict.fromkeys(candidate_pages))[:4]
+    log(f"📸 AI Candidates: {candidate_pages}")
+
+    # Collect Images for Collage
+    collage_images = []
+    for p in candidate_pages:
+        idx = int(p) - 1
+        if idx < len(images):
+            collage_images.append(images[idx])
+    
+    if collage_images:
+        preview_name = "INDEX_CANDIDATES_COLLAGE.jpg"
+        create_collage(collage_images, candidate_pages, preview_name)
         
         file_meta = {'name': preview_name, 'parents': [book_folder_id]}
         media = MediaFileUpload(preview_name, mimetype='image/jpeg')
@@ -186,15 +211,16 @@ def find_and_preview_index(pdf_name, book_folder_id):
         link = file.get('webViewLink')
         
         log("\n" + "="*60)
-        log(f"🔗 CLICK THIS LINK TO SEE THE IMAGE:")
+        log(f"🔗 CLICK THIS LINK TO SEE THE CANDIDATES:")
         log(f"👉 {link}")
         log("="*60 + "\n")
         
         log("1. Click the link above.")
-        log(f"2. Verify if it is the Index. (It says Page {found_page})")
-        log("3. If correct, RUN THIS WORKFLOW AGAIN and type that number!")
+        log("2. Look at the 4 images. Find the one that is the REAL Index.")
+        log("3. Note its Page Number (Red Box).")
+        log("4. Run this workflow again and type that number!")
     else:
-        log("❌ Could not extract preview (Page out of range).")
+        log("❌ Error creating collage.")
 
 # --- MODE 2: BUILD JSON ---
 def generate_index_from_page(pdf_name, page_num, total_pages, book_folder_id, json_name):
@@ -268,14 +294,11 @@ def main():
         log("✅ Index JSON found in Drive.")
         toc_data = download_json(book_folder_id, json_name)
     else:
-        # JSON is missing.
         if not USER_CONFIRMED_PAGE:
-            # Mode 1: Scout
             find_and_preview_index(pdf_name, book_folder_id)
-            log("\n🛑 STOPPING. Verify the image link above, then run again with the Page Number.")
+            log("\n🛑 STOPPING. Check the Collage Link above.")
             return
         else:
-            # Mode 2: Build
             log(f"✅ USER INPUT: Index is on Page {USER_CONFIRMED_PAGE}")
             try:
                 info = pdfinfo_from_path(pdf_name)
@@ -284,12 +307,12 @@ def main():
                 total_pages = 500
             toc_data = generate_index_from_page(pdf_name, USER_CONFIRMED_PAGE, total_pages, book_folder_id, json_name)
 
-    # --- STEP 2: NOW CHECK IMAGES ---
+    # --- STEP 2: CHECK IMAGES ---
     if check_images_exist(book_folder_id):
         log("✅ Images already exist in Drive. JSON is safe. Job Done.")
         return
 
-    # --- STEP 3: CONVERT IMAGES (Only if they were missing) ---
+    # --- STEP 3: CONVERT IMAGES ---
     if not toc_data: return
 
     log("\n🚀 STARTING IMAGE CONVERSION...")
