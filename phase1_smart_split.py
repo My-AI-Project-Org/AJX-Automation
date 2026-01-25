@@ -1,6 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: SMART COLLAGE SCOUT                ║")
-print("║   (Shows Top 4 Candidates in One Image)            ║")
+print("║   AJX ULTIMATE: AUTO-CLEANUP EDITION               ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -17,13 +16,13 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import google.generativeai as genai
 from pdf2image import convert_from_path, pdfinfo_from_path
-# Image Manipulation for Collage
 from PIL import Image, ImageDraw, ImageFont
 
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
 OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
-USER_CONFIRMED_PAGE = os.environ.get("USER_PROVIDED_PAGE", "").strip()
+# "25" or "25-27"
+USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
 def log(msg):
     print(msg)
@@ -134,75 +133,78 @@ def download_json(folder_id, json_name):
     fh.seek(0)
     return json.load(fh)
 
+# --- CLEANUP FUNCTION (NEW) ---
+def cleanup_previews(folder_id):
+    # Finds any file with 'COLLAGE' or 'PREVIEW' in name and deletes it
+    query = f"'{folder_id}' in parents and (name contains 'COLLAGE' or name contains 'PREVIEW') and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    files = results.get('files', [])
+    
+    if files:
+        log(f"🧹 Cleaning up {len(files)} temporary preview files...")
+        for f in files:
+            try:
+                service.files().delete(fileId=f['id']).execute()
+                log(f"   -> Deleted: {f['name']}")
+            except:
+                pass
+    else:
+        log("✨ No temp files to clean.")
+
 # --- COLLAGE CREATOR ---
 def create_collage(image_list, labels, output_name):
-    # Create a 2x2 grid (or 1x4 if easier)
-    # Resize all to 600px width for preview
     thumbnails = []
     for img in image_list:
         thumb = img.copy()
         thumb.thumbnail((600, 800))
         thumbnails.append(thumb)
     
-    # Create canvas
     w, h = thumbnails[0].size
     grid_img = Image.new('RGB', (w*2 + 20, h*2 + 20), (255, 255, 255))
-    
-    # Load default font or simple drawing
     draw = ImageDraw.Draw(grid_img)
-    
     positions = [(0,0), (w+10, 0), (0, h+10), (w+10, h+10)]
     
     for i, thumb in enumerate(thumbnails):
         if i >= 4: break
         pos = positions[i]
         grid_img.paste(thumb, pos)
-        
-        # Draw Red Box & Text
         draw.rectangle([pos[0], pos[1], pos[0]+120, pos[1]+50], fill="red")
         draw.text((pos[0]+10, pos[1]+10), f"Page {labels[i]}", fill="white")
         
     grid_img.save(output_name)
     return output_name
 
-# --- MODE 1: FIND & PREVIEW (COLLAGE MODE) ---
+# --- MODE 1: SCOUT ---
 def find_and_preview_index(pdf_name, book_folder_id):
     log("\n🕵️ MODE 1: SCOUTING FOR INDEX (TOP 4 CANDIDATES)...")
-    log("   -> Scanning first 50 pages...")
-    
     images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
     
     prompt = """
-    Identify the TOP 4 pages that look most like a Table of Contents (Index, Vishay Suchi).
-    Return a list of their Page Numbers.
+    Identify TOP 4 pages that look like the Table of Contents (Index).
     Output JSON: {"candidate_pages": [5, 22, 25, 26]}
     """
-    
-    candidate_pages = []
     try:
         response = model.generate_content([prompt] + images[:30])
         text = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(text)
         candidate_pages = data.get('candidate_pages', [])
     except:
-        candidate_pages = [1, 2, 3, 4] # Fallback
-            
-    if not candidate_pages: candidate_pages = [1, 2, 3, 4]
-    
-    # Limit to 4 unique pages
-    candidate_pages = list(dict.fromkeys(candidate_pages))[:4]
-    log(f"📸 AI Candidates: {candidate_pages}")
+        candidate_pages = [1, 2, 3, 4]
 
-    # Collect Images for Collage
+    if not candidate_pages: candidate_pages = [1, 2, 3, 4]
+    candidate_pages = list(dict.fromkeys(candidate_pages))[:4]
+    
     collage_images = []
+    valid_labels = []
     for p in candidate_pages:
         idx = int(p) - 1
         if idx < len(images):
             collage_images.append(images[idx])
+            valid_labels.append(p)
     
     if collage_images:
         preview_name = "INDEX_CANDIDATES_COLLAGE.jpg"
-        create_collage(collage_images, candidate_pages, preview_name)
+        create_collage(collage_images, valid_labels, preview_name)
         
         file_meta = {'name': preview_name, 'parents': [book_folder_id]}
         media = MediaFileUpload(preview_name, mimetype='image/jpeg')
@@ -214,28 +216,39 @@ def find_and_preview_index(pdf_name, book_folder_id):
         log(f"🔗 CLICK THIS LINK TO SEE THE CANDIDATES:")
         log(f"👉 {link}")
         log("="*60 + "\n")
-        
-        log("1. Click the link above.")
-        log("2. Look at the 4 images. Find the one that is the REAL Index.")
-        log("3. Note its Page Number (Red Box).")
-        log("4. Run this workflow again and type that number!")
+        log("NOTE: This image will be AUTO-DELETED when you run Step 2.")
     else:
         log("❌ Error creating collage.")
 
-# --- MODE 2: BUILD JSON ---
-def generate_index_from_page(pdf_name, page_num, total_pages, book_folder_id, json_name):
-    log(f"\n🏗️ MODE 2: BUILDING INDEX FROM PAGE {page_num}...")
-    start = int(page_num)
-    end = min(start + 4, total_pages)
-    images = convert_from_path(pdf_name, first_page=start, last_page=end, dpi=200)
+# --- MODE 2: MULTI-PAGE BUILDER ---
+def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
+    # 1. CLEANUP FIRST!
+    cleanup_previews(book_folder_id)
+
+    log(f"\n🏗️ MODE 2: BUILDING INDEX FROM RANGE '{input_str}'...")
+    
+    pages_to_read = []
+    if "-" in input_str:
+        start_s, end_s = input_str.split("-")
+        start = int(start_s.strip())
+        end = int(end_s.strip())
+        pages_to_read = list(range(start, end + 1))
+    else:
+        pages_to_read = [int(input_str.strip())]
+    
+    chunk_start = min(pages_to_read)
+    chunk_end = max(pages_to_read)
+    
+    raw_images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=200)
+    images = raw_images 
     
     prompt = """
-    Extract the Table of Contents from these images.
+    Extract all chapters from ALL images and merge them into a SINGLE JSON list.
     Output JSON: 
     [{"chapter_name": "History", "start_page": 5, "subtopics": []}]
     Rules: 
     1. 'start_page' must be the actual page number in the book.
-    2. Clean page numbers (remove 'A', 'B').
+    2. Clean page numbers.
     """
     
     try:
@@ -246,15 +259,18 @@ def generate_index_from_page(pdf_name, page_num, total_pages, book_folder_id, js
         log("⚠️ AI Failed to read index. Using Default.")
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    log("Cc Calculating Ranges...")
+    log("Cc Calculating Ranges & Sorting...")
     toc_data.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
+    
     for i, chap in enumerate(toc_data):
         start_p = clean_page_num(chap.get('start_page', 1))
+        
         if i < len(toc_data) - 1:
             next_p = clean_page_num(toc_data[i+1].get('start_page', start_p))
             end_p = max(start_p, next_p - 1)
         else:
             end_p = total_pages
+            
         chap['start_page'] = start_p
         chap['end_page'] = end_p
         
@@ -294,18 +310,19 @@ def main():
         log("✅ Index JSON found in Drive.")
         toc_data = download_json(book_folder_id, json_name)
     else:
-        if not USER_CONFIRMED_PAGE:
+        if not USER_INPUT_STR:
             find_and_preview_index(pdf_name, book_folder_id)
             log("\n🛑 STOPPING. Check the Collage Link above.")
             return
         else:
-            log(f"✅ USER INPUT: Index is on Page {USER_CONFIRMED_PAGE}")
             try:
                 info = pdfinfo_from_path(pdf_name)
                 total_pages = int(info["Pages"])
             except:
                 total_pages = 500
-            toc_data = generate_index_from_page(pdf_name, USER_CONFIRMED_PAGE, total_pages, book_folder_id, json_name)
+            
+            # Step 2: Build (This will run cleanup_previews first)
+            toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
     # --- STEP 2: CHECK IMAGES ---
     if check_images_exist(book_folder_id):
