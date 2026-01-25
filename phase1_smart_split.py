@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: PRIORITY JSON FIX (SYNTAX FIXED)   ║")
+print("║   AJX ULTIMATE: I/O FIX + PRIORITY JSON            ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -92,7 +92,23 @@ def download_latest_pdf(folder_id):
     results = service.files().list(q=query, orderBy='createdTime desc', pageSize=1).execute()
     items = results.get('files', [])
     if not items: return None, None
-    return items[0]['name'], items[0]['id']
+    
+    file_id = items[0]['id']
+    file_name = items[0]['name']
+    
+    log(f"⬇️ Downloading PDF: {file_name}...")
+    request = service.files().get_media(fileId=file_id)
+    fh = io.FileIO(file_name, 'wb')
+    downloader = MediaIoBaseDownload(fh, request)
+    done = False
+    while not done:
+        status, done = downloader.next_chunk()
+    
+    # 👇 THIS WAS THE MISSING LINE causing the error!
+    fh.close() 
+    log("✅ Download Complete.")
+    
+    return file_name, file_id
 
 # --- CHECKS ---
 def check_json_exists(folder_id, json_name):
@@ -126,6 +142,8 @@ def download_json(folder_id, json_name):
 def find_and_preview_index(pdf_name, book_folder_id):
     log("\n🕵️ MODE 1: SCOUTING FOR INDEX PAGE...")
     log("   -> Scanning first 50 pages...")
+    
+    # Now that fh.close() is added, this line will work!
     images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=150)
     
     prompt = """
