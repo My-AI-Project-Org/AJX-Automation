@@ -1,6 +1,6 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: INFINITE RECURSION EDITION         ║")
-print("║   (Supports 3+ Levels of Nesting Automatically)    ║")
+print("║   AJX ULTIMATE: SELF-HEALING & VERIFY              ║")
+print("║   (Runs once. Skips finished tasks. Fills gaps.)   ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -28,16 +28,7 @@ def log(msg):
     print(msg)
     sys.stdout.flush()
 
-def print_bar(current, total, msg="Processing"):
-    try:
-        percent = int((current / total) * 100)
-        bar = '█' * int(20 * current // total) + '░' * (20 - int(20 * current // total))
-        sys.stdout.write(f'\r🏁 {msg}: |{bar}| {percent}% ({current}/{total})')
-        sys.stdout.flush()
-    except:
-        pass
-
-def clean_page_num(value, default=1):
+def clean_page_num(value):
     if isinstance(value, int): return value
     try:
         cleaned = str(value).replace("l", "1").replace("O", "0").replace("o", "0")
@@ -45,7 +36,7 @@ def clean_page_num(value, default=1):
         if digits: return int(digits[0])
     except:
         pass
-    return default
+    return 1
 
 def clean_filename(name):
     return "".join(c for c in name if c.isalnum() or c in (' ', '_', '-')).strip()[:40]
@@ -91,6 +82,13 @@ def create_folder(folder_name, parent_id):
     folder = service.files().create(body=meta, fields='id').execute()
     return folder.get('id')
 
+def count_files_in_folder(folder_id):
+    """Checks how many images are currently inside a folder."""
+    query = f"'{folder_id}' in parents and mimeType = 'image/jpeg' and trashed = false"
+    # We use pageSize=1000 to be safe, though most chapters are smaller
+    results = service.files().list(q=query, pageSize=1000, fields="files(id)").execute()
+    return len(results.get('files', []))
+
 def download_latest_pdf(folder_id):
     query = f"'{folder_id}' in parents and mimeType = 'application/pdf' and trashed = false"
     results = service.files().list(q=query, orderBy='createdTime desc', pageSize=1).execute()
@@ -111,12 +109,6 @@ def check_json_exists(folder_id, json_name):
     query = f"name = '{json_name}' and '{folder_id}' in parents and trashed = false"
     results = service.files().list(q=query, fields="files(id)").execute()
     return len(results.get('files', [])) > 0
-
-def check_images_exist(folder_id):
-    query = f"'{folder_id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-    chapters = service.files().list(q=query, fields="files(id)").execute().get('files', [])
-    if not chapters: return False
-    return True
 
 def download_json(folder_id, json_name):
     query = f"name = '{json_name}' and '{folder_id}' in parents and trashed = false"
@@ -191,36 +183,29 @@ def find_and_preview_index(pdf_name, book_folder_id):
         log(f"🔗 CLICK LINK: {file.get('webViewLink')}")
         log("="*60 + "\n")
 
-# --- 🔄 RECURSIVE MATH FUNCTION ---
+# --- 🔄 RECURSIVE MATH & FOLDER CREATION ---
 def calculate_ranges_recursive(node_list, end_limit):
-    """Recursively calculates start/end pages for infinite nesting."""
     node_list.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
-    
     for i, node in enumerate(node_list):
         start_p = clean_page_num(node.get('start_page', 1))
-        
         if i < len(node_list) - 1:
             next_p = clean_page_num(node_list[i+1].get('start_page', start_p))
             end_p = max(start_p, next_p - 1)
         else:
             end_p = end_limit 
-            
         node['start_page'] = start_p
         node['end_page'] = end_p
-        node['range'] = f"{start_p}-{end_p}"
         
         if node.get('subtopics'):
             calculate_ranges_recursive(node['subtopics'], end_p)
 
-# --- 🔄 RECURSIVE FOLDER CREATOR ---
 def create_folders_recursive(node_list, parent_folder_id, map_list):
-    """Recursively creates folders and populates the map."""
     for i, node in enumerate(node_list):
-        # 1. Create Folder
+        # Create Folder
         folder_name = f"{str(i+1).zfill(2)}_{clean_filename(node['chapter_name'])}"
         fid = create_folder(folder_name, parent_folder_id)
         
-        # 2. Check for Children
+        # Check Children
         if node.get('subtopics'):
             create_folders_recursive(node['subtopics'], fid, map_list)
         else:
@@ -234,7 +219,7 @@ def create_folders_recursive(node_list, parent_folder_id, map_list):
 
 def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
     cleanup_previews(book_folder_id)
-    log(f"\n🏗️ MODE 2: BUILDING DEEP NESTED INDEX FROM RANGE '{input_str}'...")
+    log(f"\n🏗️ MODE 2: BUILDING INDEX FROM RANGE '{input_str}'...")
     
     if "-" in input_str:
         start, end = map(int, input_str.split("-"))
@@ -245,28 +230,10 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     chunk_start, chunk_end = min(pages_to_read), max(pages_to_read)
     images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=300)
     
-    # 🌟 NEW PROMPT: 3-LEVEL DEEP DETECTION 🌟
     prompt = """
-    Analyze the Table of Contents. DETECT DEEP HIERARCHY.
-    Look for:
-    1. Main Units (Bold/Large)
-    2. Chapters (Numbered 1, 2, 3)
-    3. Topics (Indented or a, b, c) -> Nest these INSIDE Chapters!
-    
+    Analyze Table of Contents. Detect Hierarchy (Units -> Chapters -> Topics).
     Output JSON (Recursive):
-    [
-      {
-        "chapter_name": "Unit I",
-        "start_page": 1,
-        "subtopics": [
-           {
-             "chapter_name": "Stone Age", 
-             "start_page": 5, 
-             "subtopics": []
-           }
-        ]
-      }
-    ]
+    [{"chapter_name": "Unit I", "start_page": 1, "subtopics": [{"chapter_name": "Topic A", "start_page": 1, "subtopics": []}]}]
     """
     
     try:
@@ -276,7 +243,7 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     except:
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    log("Cc Calculating Recursive Ranges...")
+    log("Cc Calculating Ranges...")
     calculate_ranges_recursive(toc_data, total_pages)
 
     with open(json_name, 'w', encoding='utf-8') as f:
@@ -303,10 +270,12 @@ def main():
 
     toc_data = []
     
+    # --- TASK 1: JSON CHECK ---
     if check_json_exists(book_folder_id, json_name):
-        log("✅ JSON found.")
+        log("✅ Task 1: JSON Index exists. Skipping AI.")
         toc_data = download_json(book_folder_id, json_name)
     else:
+        log("⚠️ Task 1: JSON missing. Starting generation...")
         perform_download(pdf_id, pdf_name)
         if not USER_INPUT_STR:
             find_and_preview_index(pdf_name, book_folder_id)
@@ -317,69 +286,60 @@ def main():
             except: total_pages = 500
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # 2. RECURSIVE FOLDER CREATION
-    log("\n📂 Building Deep Nested Folder Structure...")
+    # --- TASK 2: FOLDER VERIFICATION ---
+    log("\n📂 Task 2: Verifying Folder Structure...")
     chapter_map = [] 
     create_folders_recursive(toc_data, book_folder_id, chapter_map)
+    log(f"✅ Task 2 Complete: Mapped {len(chapter_map)} folders.")
 
-    # 3. CONVERT & UPLOAD
-    if check_images_exist(book_folder_id):
-        log("✅ Images likely exist.")
-    else:
-        if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
-        log("\n🚀 STARTING IMAGE CONVERSION...")
-        try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
-        except: total_pages = 500
-
-        stats = {c['id']: {'count': 0, 'expected': c['end'] - c['start'] + 1} for c in chapter_map}
-        chunk_size = 10
-        
-        for i in range(1, total_pages + 1, chunk_size):
-            last_page = min(i + chunk_size - 1, total_pages)
-            print_bar(i, total_pages, "Converting")
-            try: images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
-            except: continue
-
-            for idx, img in enumerate(images):
-                page_num = i + idx
-                
-                # Find Target in Map
-                target = None
-                start_page_of_chapter = 0
-                
-                for chap in chapter_map:
-                    if page_num >= chap['start'] and page_num <= chap['end']:
-                        target = chap
-                        start_page_of_chapter = chap['start']
-                        break
-                
-                if target:
-                    relative_num = page_num - start_page_of_chapter + 1
-                    temp_name = f"{relative_num}.jpg"
-                    img.save(temp_name, "JPEG")
-                    
-                    file_meta = {'name': temp_name, 'parents': [target['id']]}
-                    media = MediaFileUpload(temp_name, mimetype='image/jpeg')
-                    service.files().create(body=file_meta, media_body=media).execute()
-                    os.remove(temp_name)
-                    stats[target['id']]['count'] += 1
-
-    # 4. VERIFICATION
-    log("\n\n📊 VERIFICATION REPORT:")
-    log(f"{'CHAPTER / TOPIC':<40} | {'EXPECTED':<10} | {'UPLOADED':<10} | {'STATUS'}")
-    log("-" * 80)
+    # --- TASK 3: IMAGE VERIFICATION & FILLING ---
+    log("\n🚀 Task 3: Verifying Images in Folders...")
+    if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
     
-    all_good = True
-    for chap in chapter_map:
-        if 'stats' in locals():
-            expected = chap['end'] - chap['start'] + 1
-            uploaded = stats[chap['id']]['count']
-            status = "✅ OK" if uploaded == expected else "❌ MISMATCH"
-            if uploaded != expected: all_good = False
-            log(f"{chap['name'][:38]:<40} | {expected:<10} | {uploaded:<10} | {status}")
+    # Loop through CHAPTERS, not pages. This is the "Self-Healing" logic.
+    all_complete = True
+    
+    for i, chap in enumerate(chapter_map):
+        expected_count = chap['end'] - chap['start'] + 1
+        current_count = count_files_in_folder(chap['id'])
+        
+        log(f"   -> Checking [{chap['name']}] (Pages {chap['start']}-{chap['end']})")
+        
+        if current_count >= expected_count:
+            # FOLDER IS FULL -> SKIP
+            pass 
+        else:
+            # FOLDER IS EMPTY OR PARTIAL -> REFILL
+            all_complete = False
+            log(f"      ⚠️ Missing Images! (Found {current_count}, Need {expected_count}) -> Converting...")
+            
+            try:
+                # Targeted Conversion: Convert ONLY this chapter's range
+                images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
+                
+                for idx, img in enumerate(images):
+                    # Natural Numbering
+                    file_num = idx + 1
+                    file_name = f"{file_num}.jpg"
+                    
+                    # Save locally
+                    img.save(file_name, "JPEG")
+                    
+                    # Upload
+                    file_meta = {'name': file_name, 'parents': [chap['id']]}
+                    media = MediaFileUpload(file_name, mimetype='image/jpeg')
+                    service.files().create(body=file_meta, media_body=media).execute()
+                    os.remove(file_name)
+                    
+                log(f"      🎉 Refilled {len(images)} images.")
+                
+            except Exception as e:
+                log(f"      ❌ Error converting chapter: {e}")
 
-    if all_good: log("\n🎉 FULL SUCCESS! All pages verified.")
-    else: log("\n⚠️ WARNING: Some pages might be missing.")
+    if all_complete:
+        log("\n🎉 ALL TASKS COMPLETE! No missing files found.")
+    else:
+        log("\n✅ CYCLE COMPLETE. Run again if any timeouts occurred.")
 
 if __name__ == "__main__":
     main()
