@@ -62,7 +62,7 @@ try:
     API_KEYS = json.loads(keys_json)
     if not isinstance(API_KEYS, list): API_KEYS = [keys_json]
     genai.configure(api_key=API_KEYS[0])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
 except:
     log("❌ Gemini Error")
     exit()
@@ -193,35 +193,28 @@ def find_and_preview_index(pdf_name, book_folder_id):
 
 # --- 🔄 RECURSIVE MATH FUNCTION ---
 def calculate_ranges_recursive(node_list, end_limit):
-    """
-    Recursively calculates start/end pages for infinite nesting.
-    """
+    """Recursively calculates start/end pages for infinite nesting."""
     node_list.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
     
     for i, node in enumerate(node_list):
         start_p = clean_page_num(node.get('start_page', 1))
         
-        # Calculate End Page based on Next Sibling
         if i < len(node_list) - 1:
             next_p = clean_page_num(node_list[i+1].get('start_page', start_p))
             end_p = max(start_p, next_p - 1)
         else:
-            end_p = end_limit # Last sibling goes to limit
+            end_p = end_limit 
             
         node['start_page'] = start_p
         node['end_page'] = end_p
         node['range'] = f"{start_p}-{end_p}"
         
-        # RECURSION: If children exist, process them
         if node.get('subtopics'):
-            # Children must fit within Parent's range
             calculate_ranges_recursive(node['subtopics'], end_p)
 
 # --- 🔄 RECURSIVE FOLDER CREATOR ---
 def create_folders_recursive(node_list, parent_folder_id, map_list):
-    """
-    Recursively creates folders and populates the map.
-    """
+    """Recursively creates folders and populates the map."""
     for i, node in enumerate(node_list):
         # 1. Create Folder
         folder_name = f"{str(i+1).zfill(2)}_{clean_filename(node['chapter_name'])}"
@@ -229,10 +222,9 @@ def create_folders_recursive(node_list, parent_folder_id, map_list):
         
         # 2. Check for Children
         if node.get('subtopics'):
-            # This is a Parent Node (Container) -> Recurse deeper
             create_folders_recursive(node['subtopics'], fid, map_list)
         else:
-            # This is a Leaf Node (Content) -> Add to Map for Images
+            # Leaf Node -> Add to Map for Images
             map_list.append({
                 'start': int(node['start_page']),
                 'end': int(node['end_page']),
@@ -270,10 +262,7 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
            {
              "chapter_name": "Stone Age", 
              "start_page": 5, 
-             "subtopics": [
-                 {"chapter_name": "Paleolithic", "start_page": 5},
-                 {"chapter_name": "Mesolithic", "start_page": 8}
-             ]
+             "subtopics": []
            }
         ]
       }
@@ -359,4 +348,38 @@ def main():
                 start_page_of_chapter = 0
                 
                 for chap in chapter_map:
-                    if page
+                    if page_num >= chap['start'] and page_num <= chap['end']:
+                        target = chap
+                        start_page_of_chapter = chap['start']
+                        break
+                
+                if target:
+                    relative_num = page_num - start_page_of_chapter + 1
+                    temp_name = f"{relative_num}.jpg"
+                    img.save(temp_name, "JPEG")
+                    
+                    file_meta = {'name': temp_name, 'parents': [target['id']]}
+                    media = MediaFileUpload(temp_name, mimetype='image/jpeg')
+                    service.files().create(body=file_meta, media_body=media).execute()
+                    os.remove(temp_name)
+                    stats[target['id']]['count'] += 1
+
+    # 4. VERIFICATION
+    log("\n\n📊 VERIFICATION REPORT:")
+    log(f"{'CHAPTER / TOPIC':<40} | {'EXPECTED':<10} | {'UPLOADED':<10} | {'STATUS'}")
+    log("-" * 80)
+    
+    all_good = True
+    for chap in chapter_map:
+        if 'stats' in locals():
+            expected = chap['end'] - chap['start'] + 1
+            uploaded = stats[chap['id']]['count']
+            status = "✅ OK" if uploaded == expected else "❌ MISMATCH"
+            if uploaded != expected: all_good = False
+            log(f"{chap['name'][:38]:<40} | {expected:<10} | {uploaded:<10} | {status}")
+
+    if all_good: log("\n🎉 FULL SUCCESS! All pages verified.")
+    else: log("\n⚠️ WARNING: Some pages might be missing.")
+
+if __name__ == "__main__":
+    main()
