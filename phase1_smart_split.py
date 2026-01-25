@@ -1,5 +1,6 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: AUTO-CLEANUP EDITION               ║")
+print("║   AJX ULTIMATE: ALL-IN-ONE MASTER EDITION          ║")
+print("║   (Multi-Page + Collage + Nested Math + Cleanup)   ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -21,7 +22,7 @@ from PIL import Image, ImageDraw, ImageFont
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
 OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
-# "25" or "25-27"
+# User Input: Can be empty, "25", or "25-27"
 USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
 def log(msg):
@@ -40,6 +41,7 @@ def print_bar(current, total, msg="Processing"):
 def clean_page_num(value, default=1):
     if isinstance(value, int): return value
     try:
+        # Handle "B9" -> 9, Hindi -> English
         hindi_digits = str(value).maketrans("०१२३४५६७८९", "0123456789")
         cleaned = str(value).translate(hindi_digits)
         digits = re.findall(r'\d+', cleaned)
@@ -103,7 +105,7 @@ def download_latest_pdf(folder_id):
     downloader = MediaIoBaseDownload(fh, request)
     done = False
     while not done: status, done = downloader.next_chunk()
-    fh.close() 
+    fh.close() # Critical Fix: Close file so PDF converter can open it
     return file_name, file_id
 
 def check_json_exists(folder_id, json_name):
@@ -133,25 +135,18 @@ def download_json(folder_id, json_name):
     fh.seek(0)
     return json.load(fh)
 
-# --- CLEANUP FUNCTION (NEW) ---
 def cleanup_previews(folder_id):
-    # Finds any file with 'COLLAGE' or 'PREVIEW' in name and deletes it
+    # Auto-Cleaning Feature
     query = f"'{folder_id}' in parents and (name contains 'COLLAGE' or name contains 'PREVIEW') and trashed = false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get('files', [])
-    
     if files:
-        log(f"🧹 Cleaning up {len(files)} temporary preview files...")
+        log(f"🧹 Cleaning up {len(files)} temp files...")
         for f in files:
             try:
                 service.files().delete(fileId=f['id']).execute()
-                log(f"   -> Deleted: {f['name']}")
-            except:
-                pass
-    else:
-        log("✨ No temp files to clean.")
+            except: pass
 
-# --- COLLAGE CREATOR ---
 def create_collage(image_list, labels, output_name):
     thumbnails = []
     for img in image_list:
@@ -174,7 +169,6 @@ def create_collage(image_list, labels, output_name):
     grid_img.save(output_name)
     return output_name
 
-# --- MODE 1: SCOUT ---
 def find_and_preview_index(pdf_name, book_folder_id):
     log("\n🕵️ MODE 1: SCOUTING FOR INDEX (TOP 4 CANDIDATES)...")
     images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
@@ -216,15 +210,12 @@ def find_and_preview_index(pdf_name, book_folder_id):
         log(f"🔗 CLICK THIS LINK TO SEE THE CANDIDATES:")
         log(f"👉 {link}")
         log("="*60 + "\n")
-        log("NOTE: This image will be AUTO-DELETED when you run Step 2.")
     else:
         log("❌ Error creating collage.")
 
-# --- MODE 2: MULTI-PAGE BUILDER ---
+# --- THE FIX: NESTED MATH CALCULATION ---
 def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
-    # 1. CLEANUP FIRST!
     cleanup_previews(book_folder_id)
-
     log(f"\n🏗️ MODE 2: BUILDING INDEX FROM RANGE '{input_str}'...")
     
     pages_to_read = []
@@ -238,17 +229,26 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     
     chunk_start = min(pages_to_read)
     chunk_end = max(pages_to_read)
-    
-    raw_images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=200)
-    images = raw_images 
+    images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=200)
     
     prompt = """
-    Extract all chapters from ALL images and merge them into a SINGLE JSON list.
+    Extract all chapters and SUBTOPICS from these images.
+    Return a NESTED JSON structure.
+    
     Output JSON: 
-    [{"chapter_name": "History", "start_page": 5, "subtopics": []}]
+    [
+      {
+        "chapter_name": "I. Ancient History",
+        "start_page": 9,
+        "subtopics": [
+           {"chapter_name": "Stone Age", "start_page": 9},
+           {"chapter_name": "Indus Valley", "start_page": 16}
+        ]
+      }
+    ]
     Rules: 
-    1. 'start_page' must be the actual page number in the book.
-    2. Clean page numbers.
+    1. 'start_page' must be the actual page number in the book (Convert B9 -> 9).
+    2. Maintain hierarchy.
     """
     
     try:
@@ -259,12 +259,15 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
         log("⚠️ AI Failed to read index. Using Default.")
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    log("Cc Calculating Ranges & Sorting...")
+    log("Cc Calculating Ranges (Including Subtopics)...")
+    
+    # 1. SORT MAIN UNITS
     toc_data.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
     
     for i, chap in enumerate(toc_data):
         start_p = clean_page_num(chap.get('start_page', 1))
         
+        # Calculate Main Unit End Page
         if i < len(toc_data) - 1:
             next_p = clean_page_num(toc_data[i+1].get('start_page', start_p))
             end_p = max(start_p, next_p - 1)
@@ -274,11 +277,27 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
         chap['start_page'] = start_p
         chap['end_page'] = end_p
         
-        for sub in chap.get('subtopics', []):
-            s_start = clean_page_num(sub.get('start_page', start_p))
-            sub['start_page'] = s_start
-            sub['end_page'] = end_p
-            sub['range'] = f"{s_start}-{end_p}"
+        # 2. HANDLE SUBTOPICS (THE FIX)
+        subs = chap.get('subtopics', [])
+        if subs:
+            # Sort subtopics first to be safe
+            subs.sort(key=lambda x: clean_page_num(x.get('start_page', start_p)))
+            
+            for j, sub in enumerate(subs):
+                s_start = clean_page_num(sub.get('start_page', start_p))
+                
+                # Calculate Subtopic End Page
+                if j < len(subs) - 1:
+                    # End page is 1 page before the NEXT subtopic starts
+                    s_next = clean_page_num(subs[j+1].get('start_page', s_start))
+                    s_end = max(s_start, s_next - 1)
+                else:
+                    # Last subtopic ends when the Main Unit ends
+                    s_end = end_p
+                
+                sub['start_page'] = s_start
+                sub['end_page'] = s_end
+                sub['range'] = f"{s_start}-{s_end}"
 
     with open(json_name, 'w', encoding='utf-8') as f:
         json.dump(toc_data, f, indent=4, ensure_ascii=False)
@@ -289,7 +308,6 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     log(f"✅ JSON Created: {json_name}")
     return toc_data
 
-# --- MAIN ---
 def main():
     in_id = get_folder_id(INPUT_FOLDER_NAME)
     out_id = get_folder_id(OUTPUT_FOLDER_NAME)
@@ -303,13 +321,14 @@ def main():
     json_name = f"{book_name}_index.json"
     book_folder_id = create_folder(book_name, out_id)
 
-    # --- STEP 1: PRIORITIZE JSON CREATION ---
     toc_data = []
     
+    # --- CHECK 1: JSON Exists? ---
     if check_json_exists(book_folder_id, json_name):
         log("✅ Index JSON found in Drive.")
         toc_data = download_json(book_folder_id, json_name)
     else:
+        # --- CHECK 2: User Input? ---
         if not USER_INPUT_STR:
             find_and_preview_index(pdf_name, book_folder_id)
             log("\n🛑 STOPPING. Check the Collage Link above.")
@@ -321,15 +340,14 @@ def main():
             except:
                 total_pages = 500
             
-            # Step 2: Build (This will run cleanup_previews first)
+            # Step 2: Build
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # --- STEP 2: CHECK IMAGES ---
+    # --- CHECK 3: Images Exist? ---
     if check_images_exist(book_folder_id):
         log("✅ Images already exist in Drive. JSON is safe. Job Done.")
         return
 
-    # --- STEP 3: CONVERT IMAGES ---
     if not toc_data: return
 
     log("\n🚀 STARTING IMAGE CONVERSION...")
@@ -340,7 +358,16 @@ def main():
         total_pages = 500
 
     chapter_ids = []
-    for i, chap in enumerate(toc_data):
+    
+    # --- FLATTEN FOLDERS (Creates folders for Subtopics) ---
+    flat_list = []
+    for chap in toc_data:
+        if chap.get('subtopics'):
+            flat_list.extend(chap['subtopics'])
+        else:
+            flat_list.append(chap)
+            
+    for i, chap in enumerate(flat_list):
         safe_name = "".join(c for c in chap['chapter_name'] if c.isalnum() or c in (' ', '_')).strip()[:30]
         c_id = create_folder(f"{str(i+1).zfill(2)}_{safe_name}", book_folder_id)
         chapter_ids.append({'start': int(chap['start_page']), 'end': int(chap['end_page']), 'id': c_id})
@@ -355,11 +382,13 @@ def main():
 
         for idx, img in enumerate(images):
             page_num = i + idx
+            
+            # Find best match
             target_id = chapter_ids[0]['id']
             for chap in chapter_ids:
                 if page_num >= chap['start'] and page_num <= chap['end']:
                     target_id = chap['id']
-                    break
+                    break 
             
             temp_name = f"page_{str(page_num).zfill(3)}.jpg"
             img.save(temp_name, "JPEG")
