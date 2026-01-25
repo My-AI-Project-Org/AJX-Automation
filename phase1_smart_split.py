@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: PRIORITY JSON FIX                  ║")
+print("║   AJX ULTIMATE: PRIORITY JSON FIX (SYNTAX FIXED)   ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -58,7 +58,7 @@ try:
     API_KEYS = json.loads(keys_json)
     if not isinstance(API_KEYS, list): API_KEYS = [keys_json]
     genai.configure(api_key=API_KEYS[0])
-    model = genai.GenerativeModel('gemini-2.5-flash')
+    model = genai.GenerativeModel('gemini-1.5-flash')
 except:
     log("❌ Gemini Error")
     exit()
@@ -188,4 +188,129 @@ def generate_index_from_page(pdf_name, page_num, total_pages, book_folder_id, js
     prompt = """
     Extract the Table of Contents from these images.
     Output JSON: 
-    [{"chapter_name
+    [{"chapter_name": "History", "start_page": 5, "subtopics": []}]
+    Rules: 
+    1. 'start_page' must be the actual page number in the book.
+    2. Clean page numbers (remove 'A', 'B').
+    """
+    
+    try:
+        response = model.generate_content([prompt] + images)
+        text = response.text.replace("```json", "").replace("```", "").strip()
+        toc_data = json.loads(text)
+    except:
+        log("⚠️ AI Failed to read index. Using Default.")
+        toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
+        
+    log("Cc Calculating Ranges...")
+    toc_data.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
+    for i, chap in enumerate(toc_data):
+        start_p = clean_page_num(chap.get('start_page', 1))
+        if i < len(toc_data) - 1:
+            next_p = clean_page_num(toc_data[i+1].get('start_page', start_p))
+            end_p = max(start_p, next_p - 1)
+        else:
+            end_p = total_pages
+        chap['start_page'] = start_p
+        chap['end_page'] = end_p
+        
+        for sub in chap.get('subtopics', []):
+            s_start = clean_page_num(sub.get('start_page', start_p))
+            sub['start_page'] = s_start
+            sub['end_page'] = end_p
+            sub['range'] = f"{s_start}-{end_p}"
+
+    with open(json_name, 'w', encoding='utf-8') as f:
+        json.dump(toc_data, f, indent=4, ensure_ascii=False)
+    
+    file_meta = {'name': json_name, 'parents': [book_folder_id]}
+    media = MediaFileUpload(json_name, mimetype='application/json')
+    service.files().create(body=file_meta, media_body=media).execute()
+    log(f"✅ JSON Created: {json_name}")
+    return toc_data
+
+# --- MAIN ---
+def main():
+    in_id = get_folder_id(INPUT_FOLDER_NAME)
+    out_id = get_folder_id(OUTPUT_FOLDER_NAME)
+    if not in_id or not out_id: return
+
+    log("🔍 Looking for PDF...")
+    pdf_name, pdf_id = download_latest_pdf(in_id)
+    if not pdf_name: return
+
+    book_name = pdf_name.replace('.pdf', '')
+    json_name = f"{book_name}_index.json"
+    book_folder_id = create_folder(book_name, out_id)
+
+    # --- STEP 1: PRIORITIZE JSON CREATION ---
+    toc_data = []
+    
+    if check_json_exists(book_folder_id, json_name):
+        log("✅ Index JSON found in Drive.")
+        toc_data = download_json(book_folder_id, json_name)
+    else:
+        # JSON is missing.
+        if not USER_CONFIRMED_PAGE:
+            # Mode 1: Scout
+            find_and_preview_index(pdf_name, book_folder_id)
+            log("\n🛑 STOPPING. Verify the image link above, then run again with the Page Number.")
+            return
+        else:
+            # Mode 2: Build
+            log(f"✅ USER INPUT: Index is on Page {USER_CONFIRMED_PAGE}")
+            try:
+                info = pdfinfo_from_path(pdf_name)
+                total_pages = int(info["Pages"])
+            except:
+                total_pages = 500
+            toc_data = generate_index_from_page(pdf_name, USER_CONFIRMED_PAGE, total_pages, book_folder_id, json_name)
+
+    # --- STEP 2: NOW CHECK IMAGES ---
+    if check_images_exist(book_folder_id):
+        log("✅ Images already exist in Drive. JSON is safe. Job Done.")
+        return
+
+    # --- STEP 3: CONVERT IMAGES (Only if they were missing) ---
+    if not toc_data: return
+
+    log("\n🚀 STARTING IMAGE CONVERSION...")
+    try:
+        info = pdfinfo_from_path(pdf_name)
+        total_pages = int(info["Pages"])
+    except:
+        total_pages = 500
+
+    chapter_ids = []
+    for i, chap in enumerate(toc_data):
+        safe_name = "".join(c for c in chap['chapter_name'] if c.isalnum() or c in (' ', '_')).strip()[:30]
+        c_id = create_folder(f"{str(i+1).zfill(2)}_{safe_name}", book_folder_id)
+        chapter_ids.append({'start': int(chap['start_page']), 'end': int(chap['end_page']), 'id': c_id})
+
+    chunk_size = 10
+    for i in range(1, total_pages + 1, chunk_size):
+        last_page = min(i + chunk_size - 1, total_pages)
+        print_bar(i, total_pages, "Converting")
+        try:
+            images = convert_from_path(pdf_name, first_page=i, last_page=last_page, dpi=150)
+        except: continue
+
+        for idx, img in enumerate(images):
+            page_num = i + idx
+            target_id = chapter_ids[0]['id']
+            for chap in chapter_ids:
+                if page_num >= chap['start'] and page_num <= chap['end']:
+                    target_id = chap['id']
+                    break
+            
+            temp_name = f"page_{str(page_num).zfill(3)}.jpg"
+            img.save(temp_name, "JPEG")
+            file_meta = {'name': temp_name, 'parents': [target_id]}
+            media = MediaFileUpload(temp_name, mimetype='image/jpeg')
+            service.files().create(body=file_meta, media_body=media).execute()
+            os.remove(temp_name)
+
+    log("\n🎉 FULL SUCCESS!")
+
+if __name__ == "__main__":
+    main()
