@@ -1,10 +1,10 @@
-name: Phase 1 - Smart Split (Magic Link Verify)
+name: Phase 1 - Smart Split (Multi-Page Support)
 
 on:
   workflow_dispatch:
     inputs:
-      index_page_num:
-        description: 'STEP 2: Type Page Number of Index (Leave Empty for STEP 1)'
+      index_page_input:
+        description: 'STEP 2: Type Page Number OR Range (e.g. "25" or "25-27")'
         required: false
         default: ''
 
@@ -29,13 +29,13 @@ jobs:
       - name: Install Python Libraries
         run: |
           python -m pip install --upgrade pip
-          pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai
+          # 👇 'Pillow' is required for the Collage feature
+          pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai Pillow
 
-      - name: Run Magic Link Script
+      - name: Run Script
         env:
-          # Secrets for API and Drive Access
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
-          # This passes your typed number to the Python script
-          USER_PROVIDED_PAGE: ${{ inputs.index_page_num }}
+          # 👇 Passes your input (e.g. "25-27") to the Python script
+          USER_PROVIDED_INPUT: ${{ inputs.index_page_input }}
         run: python -u -W ignore phase1_smart_split.py
