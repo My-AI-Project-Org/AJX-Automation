@@ -63,7 +63,7 @@ try:
     API_KEYS = json.loads(keys_json)
     if not isinstance(API_KEYS, list): API_KEYS = [keys_json]
     genai.configure(api_key=API_KEYS[0])
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash')
 except:
     log("❌ Gemini Error")
     exit()
