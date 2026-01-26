@@ -1,0 +1,109 @@
+**ROLE:** You are a Senior Subject Matter Expert for **UPSI (Sub-Inspector)**.
+**TASK:** Extract exactly {target_count} HIGH-LEVEL MCQs from this image based on **  **.
+
+**CRITICAL DISTRIBUTION RULES:**
+
+1. **Rich/Conceptual (50%):** Format: "Which statement is INCORRECT?". Options must be complete sentences. Explanation must be a JSON Object.
+2. **Direct Factual (10%):** Hard dates/names. Explanation must be a JSON Object.
+3. **Assertion-Reason (20%):** Standard A/R logic. Explanation: 3-4 Bullet Points.
+4. **Multi-Statement (10%):** "Select code (a) 1 only...". Explanation: 3-4 Bullet Points.
+5. **Chronology (10%):** Arrange events. Explanation: 2-3 lines per event.
+
+**STRICT EXCLUSIONS:**
+- NO "Match the Following".
+- NO duplicates.
+
+**OUTPUT FORMAT:**
+Return a STRICT JSON List.
+**IMPORTANT:** 1. Start IDs strictly from **{start_id}**. (e.g., If start_id is 26, the first MCQ must be ID 26).
+2. Every MCQ object must include the field **"layout": ""**.
+
+**EXAMPLES OF REQUIRED FORMATS:**
+
+**1. RICH / CONCEPTUAL Example:**
+{{
+    "id": {start_id},
+    "type": "CONCEPTUAL",
+    "layout": "",
+    "question": "Regarding the Stone Age sites in India, which of the following statements is INCORRECT?",
+    "options": {{
+       "a": "Bhimbetka in Madhya Pradesh is famous for its prehistoric rock paintings.",
+       "b": "Robert Bruce Foote discovered the first Palaeolithic tool in India.",
+       "c": "The Neolithic age saw the beginning of agriculture and settled life.",
+       "d": "Evidence of the first domestication of animals was found in the Harappan period."
+    }},
+    "answer": "d",
+    "explanation": {{
+         "a": "Correct Fact. Bhimbetka (MP) is a UNESCO World Heritage site known for Mesolithic rock art.",
+         "b": "Correct Fact. Foote discovered the Pallavaram handaxe in 1863.",
+         "c": "Correct Fact. Neolithic revolution introduced farming, pottery, and settled village life.",
+         "d": "INCORRECT. Evidence of animal domestication begins in the **Mesolithic period**, much earlier than Harappan."
+    }}
+}}
+
+**2. MULTI-STATEMENT Example:**
+{{
+    "id": {start_id},
+    "type": "STATEMENT",
+    "layout": "",
+    "question": "Consider the following statements regarding the Morley-Minto Reforms (1909):\\n1. It introduced separate electorates for Muslims.\\n2. It allowed Indians to join the Viceroy's Executive Council.\\n\\nWhich of the statements given above is/are correct?",
+    "options": {{
+       "a": "1 only", 
+       "b": "2 only", 
+       "c": "Both 1 and 2", 
+       "d": "Neither 1 nor 2"
+    }},
+    "answer": "c",
+    "explanation": "- **Statement 1 is Correct:** The Act introduced the system of communal representation for Muslims.\\n- **Statement 2 is Correct:** Satyendra Prasanna Sinha became the first Indian to join the Viceroy's Executive Council."
+}}
+
+**3. ASSERTION-REASON Example:**
+{{
+    "id": {start_id},
+    "type": "ASSERTION_REASON", 
+    "layout": "",
+    "question": "Assertion (A): The Revolt of 1857 failed.\\nReason (R): It lacked a unified ideology.",
+    "options": {{
+       "a": "Both A and R are true and R is correct explanation of A",
+       "b": "Both A and R are true but R is NOT correct explanation",
+       "c": "A is true but R is false",
+       "d": "A is false but R is true"
+    }},
+    "answer": "a",
+    "explanation": "- The revolt failed because there was no common plan or nationalistic ideology unifying the diverse rebel groups.\\n- The rebels fought for their traditional privileges rather than a modern nation-state."
+}}
+
+**4. CHRONOLOGY Example:**
+{{
+    "id": {start_id},
+    "type": "CHRONOLOGY",
+    "layout": "",
+    "question": "Arrange these events in chronological order:\\n1. Dandi March\\n2. Quit India Movement\\n3. Simon Commission",
+    "options": {{ "a": "3 - 1 - 2", "b": "1 - 2 - 3", "c": "2 - 1 - 3", "d": "3 - 2 - 1" }},
+    "answer": "a",
+    "explanation": "1. **Simon Commission (1928):** Boycotted by Indians.\\n2. **Dandi March (1930):** Civil Disobedience Movement.\\n3. **Quit India (1942):** 'Do or Die' call."
+}}
+
+**5. DIRECT FACTUAL Example:**
+{{
+    "id": {start_id},
+    "type": "DIRECT",
+    "layout": "",
+    "question": "Who was the first Governor-General of Bengal appointed under the Regulating Act of 1773?",
+    "options": {{
+       "a": "Lord Clive",
+       "b": "Warren Hastings",
+       "c": "Lord Cornwallis",
+       "d": "Lord Wellesley"
+    }},
+    "answer": "b",
+    "explanation": {{
+         "a": "Incorrect. Clive was Governor of Bengal (1757-60).",
+         "b": "Correct. Warren Hastings became the first Governor-General of Bengal in 1774.",
+         "c": "Incorrect. Cornwallis introduced the Permanent Settlement in 1793.",
+         "d": "Incorrect. Wellesley introduced the Subsidiary Alliance in 1798."
+    }}
+}}
+
+**IMPORTANT:** - Output ONLY valid JSON.
+- **Start IDs from {start_id}**.
