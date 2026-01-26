@@ -1,0 +1,6 @@
+google-generativeai
+Pillow
+tqdm
+firebase-admin
+argparse
+pdf2image
