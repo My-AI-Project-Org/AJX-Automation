@@ -1,0 +1,146 @@
+name: AJX Master Automation (End-to-End)
+
+on:
+  workflow_dispatch:
+    inputs:
+      # 👇 Using your exact input from Phase 1
+      index_page_input:
+        description: 'STEP 2: Type Page Number OR Range (e.g. "25" or "25-27")'
+        required: false
+        default: ''
+      # Added Exam/Subject so Phase 2 knows what to name folders
+      exam_name:
+        description: 'Exam Name (e.g. UPSI)'
+        required: true
+        default: 'UPSI'
+      subject:
+        description: 'Subject (e.g. History)'
+        required: true
+        default: 'History'
+
+jobs:
+  # ------------------------------------------------------------------
+  # PHASE 1: SMART SPLIT (Your Custom Logic)
+  # ------------------------------------------------------------------
+  phase1:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Install System Dependencies (Poppler)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Python Libraries
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai Pillow
+
+      # 👇 Running your specific Phase 1 script
+      - name: Run Phase 1 Script
+        env:
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+          USER_PROVIDED_INPUT: ${{ inputs.index_page_input }}
+        run: python -u -W ignore phase1_smart_split.py
+
+      # 🚨 CRITICAL ADDITION: Save images so Phase 2 & 3 can see them
+      - name: Upload Images (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-images
+          path: AJX_Phase1_Output/
+          retention-days: 1
+
+  # ------------------------------------------------------------------
+  # PHASE 2: ARCHITECT (Creates Config & Folders)
+  # ------------------------------------------------------------------
+  phase2:
+    needs: phase1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      # Download images to read folder structure
+      - uses: actions/download-artifact@v4
+        with:
+          name: phase1-images
+          path: AJX_Phase1_Output
+          
+      # Run Headless Config
+      - name: Run Phase 2 Config
+        # Using inputs to set folder names dynamically
+        run: python phase2_headless.py --exam "${{ inputs.exam_name }}" --subject "${{ inputs.subject }}"
+        
+      # Save workflows.json for Phase 3
+      - name: Upload Config
+        uses: actions/upload-artifact@v4
+        with:
+          name: config
+          path: workflows.json
+
+  # ------------------------------------------------------------------
+  # PHASE 3: FACTORY (10 Parallel Workers)
+  # ------------------------------------------------------------------
+  phase3:
+    needs: phase2
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        worker_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] # 10 Computers
+        
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.9' }
+      - run: pip install google-generativeai Pillow tqdm
+
+      # Download Images & Config
+      - uses: actions/download-artifact@v4
+        with: { name: phase1-images, path: AJX_Phase1_Output }
+      - uses: actions/download-artifact@v4
+        with: { name: config, path: . }
+
+      # Run Specific Worker
+      - name: Run Worker ${{ matrix.worker_id }}
+        env:
+          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+        run: python phase3_worker.py 10 ${{ matrix.worker_id }}
+
+      # Upload JSON Output
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-${{ matrix.worker_id }}
+          path: AJX_OUTPUT_Phase2/
+
+  # ------------------------------------------------------------------
+  # PHASE 4: APP SYNC (Firebase Injector)
+  # ------------------------------------------------------------------
+  phase4:
+    needs: phase3
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
+        with: { python-version: '3.9' }
+      - run: pip install firebase-admin
+
+      # Download ALL JSONs from ALL 10 Workers
+      - uses: actions/download-artifact@v4
+        with:
+          path: AJX_OUTPUT_Phase2
+          merge-multiple: true
+
+      # Sync to Android App
+      - name: Sync to Firebase
+        env:
+          FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
+        run: python phase4_sync.py
