@@ -17,7 +17,7 @@ cred = credentials.Certificate(json.loads(key_json))
 
 # 👇👇 APNA DATABASE URL YAHAN REPLACE KAREIN 👇👇
 # Example: 'https://ajx-mcq-app-default-rtdb.firebaseio.com/'
-DATABASE_URL = 'https://YOUR-PROJECT-ID.firebaseio.com/' 
+DATABASE_URL = 'https://console.firebase.google.com/u/1/project/ajx-mcq-app-f5ba1/database/ajx-mcq-app-f5ba1-default-rtdb/data/~2F' 
 
 try:
     firebase_admin.initialize_app(cred, {'databaseURL': DATABASE_URL})
