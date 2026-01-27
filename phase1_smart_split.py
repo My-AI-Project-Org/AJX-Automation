@@ -1,6 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: SELF-HEALING & VERIFY              ║")
-print("║   (Runs once. Skips finished tasks. Fills gaps.)   ║")
+print("║   AJX ULTIMATE: HYBRID (DRIVE + LOCAL ARTIFACTS)   ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -17,11 +16,12 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import google.generativeai as genai
 from pdf2image import convert_from_path, pdfinfo_from_path
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
-OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
+OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output' # Drive Folder Name
+LOCAL_OUTPUT_DIR = 'AJX_Phase1_Output'   # Local Folder for GitHub Artifacts
 USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
 def log(msg):
@@ -83,9 +83,7 @@ def create_folder(folder_name, parent_id):
     return folder.get('id')
 
 def count_files_in_folder(folder_id):
-    """Checks how many images are currently inside a folder."""
     query = f"'{folder_id}' in parents and mimeType = 'image/jpeg' and trashed = false"
-    # We use pageSize=1000 to be safe, though most chapters are smaller
     results = service.files().list(q=query, pageSize=1000, fields="files(id)").execute()
     return len(results.get('files', []))
 
@@ -154,8 +152,7 @@ def create_collage(image_list, labels, output_name):
 def find_and_preview_index(pdf_name, book_folder_id):
     log("\n🕵️ MODE 1: SCOUTING FOR INDEX...")
     images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
-    prompt = """Identify TOP 4 pages that look like the Table of Contents.
-    Output JSON: {"candidate_pages": [5, 6]}"""
+    prompt = """Identify TOP 4 pages that look like the Table of Contents. Output JSON: {"candidate_pages": [5, 6]}"""
     try:
         response = model.generate_content([prompt] + images[:30])
         text = response.text.replace("```json", "").replace("```", "").strip()
@@ -183,7 +180,7 @@ def find_and_preview_index(pdf_name, book_folder_id):
         log(f"🔗 CLICK LINK: {file.get('webViewLink')}")
         log("="*60 + "\n")
 
-# --- 🔄 RECURSIVE MATH & FOLDER CREATION ---
+# --- RECURSIVE LOGIC ---
 def calculate_ranges_recursive(node_list, end_limit):
     node_list.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
     for i, node in enumerate(node_list):
@@ -199,22 +196,27 @@ def calculate_ranges_recursive(node_list, end_limit):
         if node.get('subtopics'):
             calculate_ranges_recursive(node['subtopics'], end_p)
 
-def create_folders_recursive(node_list, parent_folder_id, map_list):
+# UPDATED: Creates both Drive Folders AND Local Folders
+def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent_path):
     for i, node in enumerate(node_list):
-        # Create Folder
         folder_name = f"{str(i+1).zfill(2)}_{clean_filename(node['chapter_name'])}"
+        
+        # 1. Cloud Folder
         fid = create_folder(folder_name, parent_folder_id)
         
-        # Check Children
+        # 2. Local Folder (NEW)
+        local_path = os.path.join(local_parent_path, folder_name)
+        os.makedirs(local_path, exist_ok=True)
+        
         if node.get('subtopics'):
-            create_folders_recursive(node['subtopics'], fid, map_list)
+            create_folders_recursive(node['subtopics'], fid, map_list, local_path)
         else:
-            # Leaf Node -> Add to Map for Images
             map_list.append({
                 'start': int(node['start_page']),
                 'end': int(node['end_page']),
                 'id': fid,
-                'name': node['chapter_name']
+                'name': node['chapter_name'],
+                'local_path': local_path # Store local path for saving images
             })
 
 def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
@@ -230,12 +232,7 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     chunk_start, chunk_end = min(pages_to_read), max(pages_to_read)
     images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=300)
     
-    prompt = """
-    Analyze Table of Contents. Detect Hierarchy (Units -> Chapters -> Topics).
-    Output JSON (Recursive):
-    [{"chapter_name": "Unit I", "start_page": 1, "subtopics": [{"chapter_name": "Topic A", "start_page": 1, "subtopics": []}]}]
-    """
-    
+    prompt = """Analyze TOC. Output JSON: [{"chapter_name": "Unit I", "start_page": 1, "subtopics": []}]"""
     try:
         response = model.generate_content([prompt] + images)
         text = response.text.replace("```json", "").replace("```", "").strip()
@@ -268,6 +265,10 @@ def main():
     json_name = f"{book_name}_index.json"
     book_folder_id = create_folder(book_name, out_id)
 
+    # Initialize Local Output Root
+    if os.path.exists(LOCAL_OUTPUT_DIR): shutil.rmtree(LOCAL_OUTPUT_DIR)
+    os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+
     toc_data = []
     
     # --- TASK 1: JSON CHECK ---
@@ -286,17 +287,17 @@ def main():
             except: total_pages = 500
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # --- TASK 2: FOLDER VERIFICATION ---
+    # --- TASK 2: FOLDER VERIFICATION (Hybrid) ---
     log("\n📂 Task 2: Verifying Folder Structure...")
     chapter_map = [] 
-    create_folders_recursive(toc_data, book_folder_id, chapter_map)
+    # Passing LOCAL_OUTPUT_DIR to create mirror structure locally
+    create_folders_recursive(toc_data, book_folder_id, chapter_map, LOCAL_OUTPUT_DIR)
     log(f"✅ Task 2 Complete: Mapped {len(chapter_map)} folders.")
 
     # --- TASK 3: IMAGE VERIFICATION & FILLING ---
     log("\n🚀 Task 3: Verifying Images in Folders...")
     if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
     
-    # Loop through CHAPTERS, not pages. This is the "Self-Healing" logic.
     all_complete = True
     
     for i, chap in enumerate(chapter_map):
@@ -306,30 +307,30 @@ def main():
         log(f"   -> Checking [{chap['name']}] (Pages {chap['start']}-{chap['end']})")
         
         if current_count >= expected_count:
-            # FOLDER IS FULL -> SKIP
             pass 
         else:
-            # FOLDER IS EMPTY OR PARTIAL -> REFILL
             all_complete = False
-            log(f"      ⚠️ Missing Images! (Found {current_count}, Need {expected_count}) -> Converting...")
+            log(f"      ⚠️ Missing Images! Converting...")
             
             try:
-                # Targeted Conversion: Convert ONLY this chapter's range
                 images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
                 
                 for idx, img in enumerate(images):
-                    # Natural Numbering
                     file_num = idx + 1
                     file_name = f"{file_num}.jpg"
                     
-                    # Save locally
+                    # 1. Save locally to TEMP (for upload)
                     img.save(file_name, "JPEG")
                     
-                    # Upload
+                    # 2. Upload to Drive
                     file_meta = {'name': file_name, 'parents': [chap['id']]}
                     media = MediaFileUpload(file_name, mimetype='image/jpeg')
                     service.files().create(body=file_meta, media_body=media).execute()
-                    os.remove(file_name)
+                    
+                    # 3. MOVE to Local Artifact Folder (Don't delete!)
+                    # This ensures Phase 2 can see it
+                    final_local_path = os.path.join(chap['local_path'], file_name)
+                    shutil.move(file_name, final_local_path)
                     
                 log(f"      🎉 Refilled {len(images)} images.")
                 
@@ -337,9 +338,9 @@ def main():
                 log(f"      ❌ Error converting chapter: {e}")
 
     if all_complete:
-        log("\n🎉 ALL TASKS COMPLETE! No missing files found.")
+        log("\n🎉 ALL TASKS COMPLETE!")
     else:
-        log("\n✅ CYCLE COMPLETE. Run again if any timeouts occurred.")
+        log("\n✅ CYCLE COMPLETE.")
 
 if __name__ == "__main__":
     main()
