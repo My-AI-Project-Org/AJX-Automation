@@ -78,7 +78,12 @@ def get_folder_id(folder_name, parent_id=None):
 def create_folder(folder_name, parent_id):
     existing = get_folder_id(folder_name, parent_id)
     if existing: return existing
-    meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
+    
+    # Logic Update: Handle Root Folder Creation (parent_id is None)
+    meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+    if parent_id:
+        meta['parents'] = [parent_id]
+        
     folder = service.files().create(body=meta, fields='id').execute()
     return folder.get('id')
 
@@ -130,6 +135,16 @@ def cleanup_previews(folder_id):
             try: service.files().delete(fileId=f['id']).execute()
             except: pass
 
+def cleanup_final_collage(book_folder_id):
+    log("\n🧹 Final Cleanup: Checking for old collage images...")
+    query = f"'{book_folder_id}' in parents and name contains 'COLLAGE' and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    files = results.get('files', [])
+    if files:
+        for f in files:
+            try: service.files().delete(fileId=f['id']).execute()
+            except: pass
+
 def create_collage(image_list, labels, output_name):
     thumbnails = []
     for img in image_list:
@@ -151,6 +166,8 @@ def create_collage(image_list, labels, output_name):
 
 def find_and_preview_index(pdf_name, book_folder_id):
     log("\n🕵️ MODE 1: SCOUTING FOR INDEX...")
+    cleanup_previews(book_folder_id)
+    
     images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
     prompt = """Identify TOP 4 pages that look like the Table of Contents. Output JSON: {"candidate_pages": [5, 6]}"""
     try:
@@ -196,7 +213,6 @@ def calculate_ranges_recursive(node_list, end_limit):
         if node.get('subtopics'):
             calculate_ranges_recursive(node['subtopics'], end_p)
 
-# UPDATED: Creates both Drive Folders AND Local Folders
 def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent_path):
     for i, node in enumerate(node_list):
         folder_name = f"{str(i+1).zfill(2)}_{clean_filename(node['chapter_name'])}"
@@ -204,7 +220,7 @@ def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent
         # 1. Cloud Folder
         fid = create_folder(folder_name, parent_folder_id)
         
-        # 2. Local Folder (NEW)
+        # 2. Local Folder
         local_path = os.path.join(local_parent_path, folder_name)
         os.makedirs(local_path, exist_ok=True)
         
@@ -216,7 +232,7 @@ def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent
                 'end': int(node['end_page']),
                 'id': fid,
                 'name': node['chapter_name'],
-                'local_path': local_path # Store local path for saving images
+                'local_path': local_path
             })
 
 def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
@@ -254,12 +270,22 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
 
 def main():
     in_id = get_folder_id(INPUT_FOLDER_NAME)
+    
+    # 👇 CRITICAL FIX: If Output Folder doesn't exist, CREATE IT.
     out_id = get_folder_id(OUTPUT_FOLDER_NAME)
-    if not in_id or not out_id: return
+    if not out_id:
+        log(f"📁 Creating Missing Output Folder: {OUTPUT_FOLDER_NAME}")
+        out_id = create_folder(OUTPUT_FOLDER_NAME, None)
+
+    if not in_id: 
+        log("❌ Fatal: AJX_Input folder missing! Please create it and upload PDF.")
+        return
 
     log("🔍 Looking for PDF...")
     pdf_name, pdf_id = download_latest_pdf(in_id)
-    if not pdf_name: return
+    if not pdf_name: 
+        log("❌ No PDF found in AJX_Input")
+        return
 
     book_name = pdf_name.replace('.pdf', '')
     json_name = f"{book_name}_index.json"
@@ -276,25 +302,27 @@ def main():
         log("✅ Task 1: JSON Index exists. Skipping AI.")
         toc_data = download_json(book_folder_id, json_name)
     else:
-        log("⚠️ Task 1: JSON missing. Starting generation...")
-        perform_download(pdf_id, pdf_name)
+        # Check if user input is empty (for Scouting)
         if not USER_INPUT_STR:
+            log("⚠️ No Page Range Provided. Starting SCOUT MODE...")
+            perform_download(pdf_id, pdf_name)
             find_and_preview_index(pdf_name, book_folder_id)
-            log("\n🛑 STOPPING. Check Link.")
-            return
+            log("\n🛑 STOPPING to let you check the Link. Phase 1 Paused.")
+            return # <--- Yahan rukega aur link dega
         else:
+            log(f"⚠️ Page Range Found: {USER_INPUT_STR}. Starting INDEX GENERATION...")
+            perform_download(pdf_id, pdf_name)
             try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
             except: total_pages = 500
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # --- TASK 2: FOLDER VERIFICATION (Hybrid) ---
+    # --- TASK 2: FOLDER VERIFICATION ---
     log("\n📂 Task 2: Verifying Folder Structure...")
     chapter_map = [] 
-    # Passing LOCAL_OUTPUT_DIR to create mirror structure locally
     create_folders_recursive(toc_data, book_folder_id, chapter_map, LOCAL_OUTPUT_DIR)
     log(f"✅ Task 2 Complete: Mapped {len(chapter_map)} folders.")
 
-    # --- TASK 3: IMAGE VERIFICATION & FILLING ---
+    # --- TASK 3: IMAGE VERIFICATION ---
     log("\n🚀 Task 3: Verifying Images in Folders...")
     if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
     
@@ -318,17 +346,12 @@ def main():
                 for idx, img in enumerate(images):
                     file_num = idx + 1
                     file_name = f"{file_num}.jpg"
-                    
-                    # 1. Save locally to TEMP (for upload)
                     img.save(file_name, "JPEG")
                     
-                    # 2. Upload to Drive
                     file_meta = {'name': file_name, 'parents': [chap['id']]}
                     media = MediaFileUpload(file_name, mimetype='image/jpeg')
                     service.files().create(body=file_meta, media_body=media).execute()
                     
-                    # 3. MOVE to Local Artifact Folder (Don't delete!)
-                    # This ensures Phase 2 can see it
                     final_local_path = os.path.join(chap['local_path'], file_name)
                     shutil.move(file_name, final_local_path)
                     
@@ -338,9 +361,10 @@ def main():
                 log(f"      ❌ Error converting chapter: {e}")
 
     if all_complete:
-        log("\n🎉 ALL TASKS COMPLETE!")
+        cleanup_final_collage(book_folder_id)
+        log("\n🎉 ALL TASKS COMPLETE! Ready for Phase 2.")
     else:
-        log("\n✅ CYCLE COMPLETE.")
+        log("\n✅ CYCLE COMPLETE. Please check logs.")
 
 if __name__ == "__main__":
     main()
