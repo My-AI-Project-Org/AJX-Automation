@@ -143,7 +143,7 @@ jobs:
           python-version: '3.9'
           
       - name: Install Firebase Admin
-        run: pip install firebase-admin
+        run: pip install firebase-admin google-api-python-client google-auth-oauthlib
 
       # 👇 FIXED: Only downloads artifacts starting with "out-"
       - name: Download All Worker Outputs
