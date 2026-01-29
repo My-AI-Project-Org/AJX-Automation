@@ -48,7 +48,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -u -W ignore phase1_smart_split.py
 
-      # Images save kar rahe hain taaki Phase 3 use kar sake
+      # Save Images for Phase 3
       - name: Upload Images to Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -66,12 +66,12 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
       
-      # 👇 ERROR FIX: Python setup aur Libraries install karna zaroori hai
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
+      # 👇 FIXED: Added missing libraries for Phase 2
       - name: Install Libraries
         run: pip install google-api-python-client google-auth-oauthlib
       
@@ -108,10 +108,10 @@ jobs:
         with:
           python-version: '3.9'
           
+      # 👇 FIXED: Added firebase-admin here too
       - name: Install Dependencies
         run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib
 
-      # Images download kar rahe hain
       - name: Download Images
         uses: actions/download-artifact@v4
         with:
