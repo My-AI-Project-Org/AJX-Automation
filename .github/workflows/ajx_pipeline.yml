@@ -18,7 +18,7 @@ on:
 
 jobs:
   # ------------------------------------------------------------------
-  # PHASE 1: SMART SPLIT
+  # PHASE 1: SMART SPLIT (Images Banao + Upload Karo)
   # ------------------------------------------------------------------
   phase1:
     runs-on: ubuntu-latest
@@ -48,7 +48,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -u -W ignore phase1_smart_split.py
 
-      # Save Images for Phase 3
+      # 👇 YE STEP MISSING THA: Images ko agle phase ke liye save karna
       - name: Upload Images to Artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -57,7 +57,7 @@ jobs:
           retention-days: 1
 
   # ------------------------------------------------------------------
-  # PHASE 2: ARCHITECT (Cloud Mode)
+  # PHASE 2: ARCHITECT (Cloud Brain)
   # ------------------------------------------------------------------
   phase2:
     needs: phase1
@@ -71,7 +71,7 @@ jobs:
         with:
           python-version: '3.9'
 
-      # 👇 FIXED: Added missing libraries for Phase 2
+      # 👇 YE STEP MISSING THA: Google Libraries install karna
       - name: Install Libraries
         run: pip install google-api-python-client google-auth-oauthlib
       
@@ -108,10 +108,11 @@ jobs:
         with:
           python-version: '3.9'
           
-      # 👇 FIXED: Added firebase-admin here too
+      # 👇 Firebase Admin add kiya hai
       - name: Install Dependencies
         run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib
 
+      # 👇 YE STEP MISSING THA: Images wapas download karna
       - name: Download Images
         uses: actions/download-artifact@v4
         with:
