@@ -18,7 +18,7 @@ on:
 
 jobs:
   # ------------------------------------------------------------------
-  # PHASE 1: SMART SPLIT (Uses existing phase1_smart_split.py)
+  # PHASE 1: SMART SPLIT
   # ------------------------------------------------------------------
   phase1:
     runs-on: ubuntu-latest
@@ -37,11 +37,8 @@ jobs:
           python-version: '3.9'
 
       - name: Install Libraries
-        run: |
-          pip install --upgrade pip
-          pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai Pillow
+        run: pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai Pillow
 
-      # 👇 FIXED: Ab ye 'phase1_smart_split.py' chalayega jo aapke paas hai
       - name: Run Phase 1
         env:
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
@@ -51,8 +48,16 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -u -W ignore phase1_smart_split.py
 
+      # Images save kar rahe hain taaki Phase 3 use kar sake
+      - name: Upload Images to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase1-images
+          path: AJX_Phase1_Output/
+          retention-days: 1
+
   # ------------------------------------------------------------------
-  # PHASE 2: ARCHITECT (Cloud Mode - No Artifacts)
+  # PHASE 2: ARCHITECT (Cloud Mode)
   # ------------------------------------------------------------------
   phase2:
     needs: phase1
@@ -61,8 +66,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
       
-      # 👇 NOTE: Artifact download step hata diya hai. 
-      # Ye seedha Google Drive check karega.
+      # 👇 ERROR FIX: Python setup aur Libraries install karna zaroori hai
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Libraries
+        run: pip install google-api-python-client google-auth-oauthlib
       
       - name: Run Phase 2 Config
         env:
@@ -71,7 +82,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python phase2_headless.py
       
-      - name: Upload Config (Backup)
+      - name: Upload Config
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -100,18 +111,28 @@ jobs:
       - name: Install Dependencies
         run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib
 
+      # Images download kar rahe hain
+      - name: Download Images
+        uses: actions/download-artifact@v4
+        with:
+          name: phase1-images
+          path: AJX_Phase1_Output
+
       - name: Run Worker ${{ matrix.worker_id }}
         env:
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_KEY }}
+          FIREBASE_DB_URL: "https://ajx-mcq-app-f5ba1-default-rtdb.firebaseio.com/"
         run: python phase3_worker.py 10 ${{ matrix.worker_id }}
 
       - name: Upload Worker Output
         uses: actions/upload-artifact@v4
         with:
           name: out-${{ matrix.worker_id }}
-          path: AJX_OUTPUT_Phase2/
+          path: AJX_Worker_Output/
 
   # ------------------------------------------------------------------
   # PHASE 4: SYNC (Firebase)
@@ -143,4 +164,5 @@ jobs:
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
         run: python phase4_sync.py
