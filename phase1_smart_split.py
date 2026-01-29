@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX ULTIMATE: HYBRID (DRIVE + LOCAL ARTIFACTS)   ║")
+print("║   AJX PHASE 1: HYBRID + LIVE TELEGRAM TERMINAL     ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -9,6 +9,9 @@ import time
 import shutil
 import sys
 import re
+import urllib.request
+import urllib.parse
+from collections import deque
 
 # Google Libraries
 from google.oauth2.credentials import Credentials 
@@ -24,9 +27,70 @@ OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output' # Drive Folder Name
 LOCAL_OUTPUT_DIR = 'AJX_Phase1_Output'   # Local Folder for GitHub Artifacts
 USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
+# --- 🟢 LIVE TELEGRAM TERMINAL SYSTEM ---
+class TelegramTerminal:
+    def __init__(self):
+        self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        self.message_id = None
+        self.last_update_time = 0
+        self.log_buffer = deque(maxlen=10) # Last 10 lines only
+        self.current_progress = 0
+        self.current_status = "Initializing..."
+
+    def start(self):
+        if not self.token: return
+        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (HYBRID)</b>\nInitializing...")
+
+    def log_stream(self, msg):
+        clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
+        self.log_buffer.append(f"> {clean_msg}")
+        self._refresh_display()
+
+    def update_progress(self, percent, status):
+        self.current_progress = percent
+        self.current_status = status
+        self._refresh_display()
+
+    def _refresh_display(self):
+        # Throttle updates (1.5 sec gap)
+        if time.time() - self.last_update_time < 1.5 and self.current_progress < 100: return
+        if not self.token or not self.message_id: return
+        
+        logs_text = "\n".join(self.log_buffer)
+        bar_len = 10
+        filled = int(bar_len * self.current_progress / 100)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        
+        text = (f"<b>💻 AJX PHASE 1 (HYBRID)</b>\n<code>{logs_text}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
+                f"<code>[{bar}] {self.current_progress}%</code>")
+        self._edit_msg(text)
+        self.last_update_time = time.time()
+
+    def _send_new(self, text):
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            data = urllib.parse.urlencode({"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}).encode()
+            with urllib.request.urlopen(urllib.request.Request(url, data=data)) as response:
+                return json.loads(response.read())['result']['message_id']
+        except: return None
+
+    def _edit_msg(self, text):
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/editMessageText"
+            data = urllib.parse.urlencode({"chat_id": self.chat_id, "message_id": self.message_id, "text": text, "parse_mode": "HTML"}).encode()
+            urllib.request.urlopen(urllib.request.Request(url, data=data))
+        except: pass
+
+# Initialize Terminal
+terminal = TelegramTerminal()
+
+# Updated Log Function (Console + Telegram)
 def log(msg):
     print(msg)
     sys.stdout.flush()
+    terminal.log_stream(msg)
 
 def clean_page_num(value):
     if isinstance(value, int): return value
@@ -34,8 +98,7 @@ def clean_page_num(value):
         cleaned = str(value).replace("l", "1").replace("O", "0").replace("o", "0")
         digits = re.findall(r'\d+', cleaned)
         if digits: return int(digits[0])
-    except:
-        pass
+    except: pass
     return 1
 
 def clean_filename(name):
@@ -79,7 +142,6 @@ def create_folder(folder_name, parent_id):
     existing = get_folder_id(folder_name, parent_id)
     if existing: return existing
     
-    # Logic Update: Handle Root Folder Creation (parent_id is None)
     meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
     if parent_id:
         meta['parents'] = [parent_id]
@@ -100,6 +162,7 @@ def download_latest_pdf(folder_id):
     return items[0]['name'], items[0]['id']
 
 def perform_download(file_id, file_name):
+    terminal.update_progress(10, f"Downloading PDF...")
     log(f"⬇️ Downloading PDF: {file_name}...")
     request = service.files().get_media(fileId=file_id)
     fh = io.FileIO(file_name, 'wb')
@@ -136,7 +199,7 @@ def cleanup_previews(folder_id):
             except: pass
 
 def cleanup_final_collage(book_folder_id):
-    log("\n🧹 Final Cleanup: Checking for old collage images...")
+    log("\n🧹 Final Cleanup...")
     query = f"'{book_folder_id}' in parents and name contains 'COLLAGE' and trashed = false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get('files', [])
@@ -165,6 +228,7 @@ def create_collage(image_list, labels, output_name):
     return output_name
 
 def find_and_preview_index(pdf_name, book_folder_id):
+    terminal.update_progress(15, "Scouting Index...")
     log("\n🕵️ MODE 1: SCOUTING FOR INDEX...")
     cleanup_previews(book_folder_id)
     
@@ -193,9 +257,13 @@ def find_and_preview_index(pdf_name, book_folder_id):
         file_meta = {'name': preview_name, 'parents': [book_folder_id]}
         media = MediaFileUpload(preview_name, mimetype='image/jpeg')
         file = service.files().create(body=file_meta, media_body=media, fields='id, webViewLink').execute()
+        
+        link = file.get('webViewLink')
+        terminal.update_progress(100, "🛑 ACTION REQUIRED")
         log("\n" + "="*60)
-        log(f"🔗 CLICK LINK: {file.get('webViewLink')}")
+        log(f"🔗 CLICK LINK: {link}")
         log("="*60 + "\n")
+        terminal.log_stream(f"🔗 Check Link: {link}")
 
 # --- RECURSIVE LOGIC ---
 def calculate_ranges_recursive(node_list, end_limit):
@@ -237,6 +305,7 @@ def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent
 
 def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, json_name):
     cleanup_previews(book_folder_id)
+    terminal.update_progress(30, "AI Analyzing TOC...")
     log(f"\n🏗️ MODE 2: BUILDING INDEX FROM RANGE '{input_str}'...")
     
     if "-" in input_str:
@@ -269,29 +338,31 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     return toc_data
 
 def main():
+    terminal.start()
     in_id = get_folder_id(INPUT_FOLDER_NAME)
     
-    # 👇 CRITICAL FIX: If Output Folder doesn't exist, CREATE IT.
     out_id = get_folder_id(OUTPUT_FOLDER_NAME)
     if not out_id:
         log(f"📁 Creating Missing Output Folder: {OUTPUT_FOLDER_NAME}")
         out_id = create_folder(OUTPUT_FOLDER_NAME, None)
 
     if not in_id: 
-        log("❌ Fatal: AJX_Input folder missing! Please create it and upload PDF.")
+        log("❌ Fatal: AJX_Input folder missing!")
+        terminal.update_progress(0, "INPUT MISSING")
         return
 
+    terminal.update_progress(5, "Searching PDF...")
     log("🔍 Looking for PDF...")
     pdf_name, pdf_id = download_latest_pdf(in_id)
     if not pdf_name: 
         log("❌ No PDF found in AJX_Input")
+        terminal.update_progress(0, "NO PDF FOUND")
         return
 
     book_name = pdf_name.replace('.pdf', '')
     json_name = f"{book_name}_index.json"
     book_folder_id = create_folder(book_name, out_id)
 
-    # Initialize Local Output Root
     if os.path.exists(LOCAL_OUTPUT_DIR): shutil.rmtree(LOCAL_OUTPUT_DIR)
     os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
 
@@ -300,49 +371,53 @@ def main():
     # --- TASK 1: JSON CHECK ---
     if check_json_exists(book_folder_id, json_name):
         log("✅ Task 1: JSON Index exists. Skipping AI.")
+        terminal.update_progress(20, "Loading JSON...")
         toc_data = download_json(book_folder_id, json_name)
     else:
-        # Check if user input is empty (for Scouting)
         if not USER_INPUT_STR:
             log("⚠️ No Page Range Provided. Starting SCOUT MODE...")
             perform_download(pdf_id, pdf_name)
             find_and_preview_index(pdf_name, book_folder_id)
-            log("\n🛑 STOPPING to let you check the Link. Phase 1 Paused.")
-            return # <--- Yahan rukega aur link dega
+            log("\n🛑 STOPPING for User Input. Check Telegram Link.")
+            return 
         else:
-            log(f"⚠️ Page Range Found: {USER_INPUT_STR}. Starting INDEX GENERATION...")
+            log(f"⚠️ Page Range Found: {USER_INPUT_STR}")
             perform_download(pdf_id, pdf_name)
             try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
             except: total_pages = 500
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
     # --- TASK 2: FOLDER VERIFICATION ---
+    terminal.update_progress(50, "Creating Folders...")
     log("\n📂 Task 2: Verifying Folder Structure...")
     chapter_map = [] 
     create_folders_recursive(toc_data, book_folder_id, chapter_map, LOCAL_OUTPUT_DIR)
     log(f"✅ Task 2 Complete: Mapped {len(chapter_map)} folders.")
 
     # --- TASK 3: IMAGE VERIFICATION ---
-    log("\n🚀 Task 3: Verifying Images in Folders...")
+    log("\n🚀 Task 3: Verifying Images...")
     if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
     
     all_complete = True
+    total_chaps = len(chapter_map)
     
     for i, chap in enumerate(chapter_map):
+        # Update Progress Bar
+        percent = 60 + int((i / total_chaps) * 40)
+        terminal.update_progress(percent, f"Active: {chap['name']}")
+        
         expected_count = chap['end'] - chap['start'] + 1
         current_count = count_files_in_folder(chap['id'])
         
-        log(f"   -> Checking [{chap['name']}] (Pages {chap['start']}-{chap['end']})")
+        log(f"   -> Checking [{chap['name']}]")
         
         if current_count >= expected_count:
             pass 
         else:
             all_complete = False
             log(f"      ⚠️ Missing Images! Converting...")
-            
             try:
                 images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
-                
                 for idx, img in enumerate(images):
                     file_num = idx + 1
                     file_name = f"{file_num}.jpg"
@@ -352,18 +427,20 @@ def main():
                     media = MediaFileUpload(file_name, mimetype='image/jpeg')
                     service.files().create(body=file_meta, media_body=media).execute()
                     
+                    # Local Save for Artifacts
                     final_local_path = os.path.join(chap['local_path'], file_name)
                     shutil.move(file_name, final_local_path)
                     
                 log(f"      🎉 Refilled {len(images)} images.")
-                
             except Exception as e:
                 log(f"      ❌ Error converting chapter: {e}")
 
     if all_complete:
         cleanup_final_collage(book_folder_id)
+        terminal.update_progress(100, "✅ PHASE 1 DONE")
         log("\n🎉 ALL TASKS COMPLETE! Ready for Phase 2.")
     else:
+        terminal.update_progress(100, "✅ CYCLE DONE")
         log("\n✅ CYCLE COMPLETE. Please check logs.")
 
 if __name__ == "__main__":
