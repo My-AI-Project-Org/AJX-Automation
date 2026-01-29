@@ -18,7 +18,7 @@ on:
 
 jobs:
   # ------------------------------------------------------------------
-  # PHASE 1: SMART SPLIT (Drive Upload)
+  # PHASE 1: SMART SPLIT (Uses existing phase1_smart_split.py)
   # ------------------------------------------------------------------
   phase1:
     runs-on: ubuntu-latest
@@ -41,18 +41,18 @@ jobs:
           pip install --upgrade pip
           pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai Pillow
 
-      # Script Drive par upload karegi, Artifact ki zaroorat nahi
-      - name: Run Hybrid Phase 1
+      # 👇 FIXED: Ab ye 'phase1_smart_split.py' chalayega jo aapke paas hai
+      - name: Run Phase 1
         env:
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
           USER_PROVIDED_INPUT: ${{ inputs.index_page_input }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -u -W ignore phase1_hybrid.py
+        run: python -u -W ignore phase1_smart_split.py
 
   # ------------------------------------------------------------------
-  # PHASE 2: ARCHITECT (Uses Drive + Telegram)
+  # PHASE 2: ARCHITECT (Cloud Mode - No Artifacts)
   # ------------------------------------------------------------------
   phase2:
     needs: phase1
@@ -61,8 +61,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
       
-      # 👇 UPDATE: Artifact Download STEP HATA DIYA HAI
-      # Kyunki ab phase2_headless.py seedha Drive se file uthayega.
+      # 👇 NOTE: Artifact download step hata diya hai. 
+      # Ye seedha Google Drive check karega.
       
       - name: Run Phase 2 Config
         env:
