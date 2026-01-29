@@ -18,7 +18,7 @@ on:
 
 jobs:
   # ------------------------------------------------------------------
-  # PHASE 1: SMART SPLIT (Drive Upload + Local Artifacts)
+  # PHASE 1: SMART SPLIT (Drive Upload)
   # ------------------------------------------------------------------
   phase1:
     runs-on: ubuntu-latest
@@ -41,7 +41,7 @@ jobs:
           pip install --upgrade pip
           pip install google-api-python-client google-auth-oauthlib pdf2image google-generativeai Pillow
 
-      # Runs your Hybrid Phase 1 Script
+      # Script Drive par upload karegi, Artifact ki zaroorat nahi
       - name: Run Hybrid Phase 1
         env:
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
@@ -49,18 +49,10 @@ jobs:
           USER_PROVIDED_INPUT: ${{ inputs.index_page_input }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python -u -W ignore phase1_smart_split.py
-
-      # Saves Images for Phase 2
-      - name: Upload Images to GitHub Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase1-images
-          path: AJX_Phase1_Output/
-          retention-days: 1
+        run: python -u -W ignore phase1_hybrid.py
 
   # ------------------------------------------------------------------
-  # PHASE 2: ARCHITECT (Uses Images from Phase 1)
+  # PHASE 2: ARCHITECT (Uses Drive + Telegram)
   # ------------------------------------------------------------------
   phase2:
     needs: phase1
@@ -68,25 +60,23 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        
-      - name: Download Phase 1 Images
-        uses: actions/download-artifact@v4
-        with:
-          name: phase1-images
-          path: AJX_Phase1_Output
+      
+      # 👇 UPDATE: Artifact Download STEP HATA DIYA HAI
+      # Kyunki ab phase2_headless.py seedha Drive se file uthayega.
       
       - name: Run Phase 2 Config
         env:
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python phase2_headless.py --exam "${{ inputs.exam_name }}" --subject "${{ inputs.subject }}"
+        run: python phase2_headless.py
       
-      - name: Upload Config
+      - name: Upload Config (Backup)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: config
-          path: workflows.json
+          path: config.json
 
   # ------------------------------------------------------------------
   # PHASE 3: FACTORY (10 Workers)
@@ -101,7 +91,7 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -110,23 +100,11 @@ jobs:
       - name: Install Dependencies
         run: pip install google-generativeai Pillow rich
 
-      - name: Download Images
-        uses: actions/download-artifact@v4
-        with:
-          name: phase1-images
-          path: AJX_Phase1_Output
-          
-      - name: Download Config
-        uses: actions/download-artifact@v4
-        with:
-          name: config
-          path: .
-
       - name: Run Worker ${{ matrix.worker_id }}
         env:
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}          
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python phase3_worker.py 10 ${{ matrix.worker_id }}
 
       - name: Upload Worker Output
@@ -144,7 +122,7 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
-        
+      
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -153,7 +131,6 @@ jobs:
       - name: Install Firebase Admin
         run: pip install firebase-admin google-api-python-client google-auth-oauthlib
 
-      # 👇 FIXED: Only downloads artifacts starting with "out-"
       - name: Download All Worker Outputs
         uses: actions/download-artifact@v4
         with:
