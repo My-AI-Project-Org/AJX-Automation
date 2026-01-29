@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════╗")
-print("║   AJX PHASE 2: TOC DEEP SCAN & INDEXING    ║")
+print("║   AJX PHASE 2: TOC DEEP SCAN (TELEGRAM)    ║")
 print("╚════════════════════════════════════════════╝")
 
 import os
@@ -7,6 +7,9 @@ import json
 import io
 import time
 import sys
+import urllib.request
+import urllib.parse
+from collections import deque
 import PIL.Image
 
 # Google Libraries
@@ -18,12 +21,77 @@ import google.generativeai as genai
 # --- CONFIGURATION ---
 INPUT_ROOT = 'AJX_Phase1_Output'
 
+# --- 🟢 LIVE TELEGRAM TERMINAL SYSTEM ---
+class TelegramTerminal:
+    def __init__(self):
+        self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
+        self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        self.message_id = None
+        self.last_update_time = 0
+        self.log_buffer = deque(maxlen=10) # Last 10 lines only
+        self.current_progress = 0
+        self.current_status = "Initializing..."
+
+    def start(self):
+        if not self.token: return
+        self.message_id = self._send_new("<b>💻 AJX PHASE 2 (ANALYZER)</b>\nInitializing...")
+
+    def log_stream(self, msg):
+        clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
+        self.log_buffer.append(f"> {clean_msg}")
+        self._refresh_display()
+
+    def update_progress(self, percent, status):
+        self.current_progress = percent
+        self.current_status = status
+        self._refresh_display()
+
+    def _refresh_display(self):
+        # Throttle updates (1.5 sec gap)
+        if time.time() - self.last_update_time < 1.5 and self.current_progress < 100: return
+        if not self.token or not self.message_id: return
+        
+        logs_text = "\n".join(self.log_buffer)
+        bar_len = 10
+        filled = int(bar_len * self.current_progress / 100)
+        bar = "█" * filled + "░" * (bar_len - filled)
+        
+        text = (f"<b>💻 AJX PHASE 2 (ANALYZER)</b>\n<code>{logs_text}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
+                f"<code>[{bar}] {self.current_progress}%</code>")
+        self._edit_msg(text)
+        self.last_update_time = time.time()
+
+    def _send_new(self, text):
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+            data = urllib.parse.urlencode({"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}).encode()
+            with urllib.request.urlopen(urllib.request.Request(url, data=data)) as response:
+                return json.loads(response.read())['result']['message_id']
+        except: return None
+
+    def _edit_msg(self, text):
+        try:
+            url = f"https://api.telegram.org/bot{self.token}/editMessageText"
+            data = urllib.parse.urlencode({"chat_id": self.chat_id, "message_id": self.message_id, "text": text, "parse_mode": "HTML"}).encode()
+            urllib.request.urlopen(urllib.request.Request(url, data=data))
+        except: pass
+
+# Initialize Terminal
+terminal = TelegramTerminal()
+
+# Custom Log Function
+def log(msg):
+    print(msg)
+    sys.stdout.flush()
+    terminal.log_stream(msg)
+
 # --- AUTHENTICATION ---
 keys_json = os.environ.get("GEMINI_API_KEYS_LIST")
 oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
 
 if not keys_json or not oauth_json:
-    print("❌ FATAL: Secrets missing. Script needs 'GEMINI_API_KEYS_LIST' and 'GDRIVE_OAUTH_JSON'.")
+    log("❌ FATAL: Secrets missing.")
     exit()
 
 # Setup Gemini
@@ -33,7 +101,7 @@ try:
     genai.configure(api_key=API_KEYS[0])
     model = genai.GenerativeModel('gemini-2.5-flash')
 except:
-    print("❌ Error setting up Gemini API.")
+    log("❌ Error setting up Gemini API.")
     exit()
 
 # Setup Drive
@@ -41,9 +109,9 @@ try:
     token_info = json.loads(oauth_json)
     creds = Credentials.from_authorized_user_info(token_info, ['https://www.googleapis.com/auth/drive'])
     service = build('drive', 'v3', credentials=creds)
-    print("✅ Authenticated with Drive.")
+    log("✅ Authenticated with Drive.")
 except Exception as e:
-    print(f"❌ Drive Auth Error: {e}")
+    log(f"❌ Drive Auth Error: {e}")
     exit()
 
 # --- HELPER FUNCTIONS ---
@@ -72,11 +140,11 @@ def get_first_chapter_images(book_folder_id, limit=20):
     subfolders = results.get('files', [])
     
     if not subfolders:
-        print("❌ No subfolders found in book folder.")
+        log("❌ No subfolders found in book folder.")
         return []
 
     first_sub_id = subfolders[0]['id']
-    print(f"📂 Scanning subfolder: {subfolders[0]['name']}")
+    log(f"📂 Scanning subfolder: {subfolders[0]['name']}")
 
     # 2. Get images from that folder
     img_query = f"'{first_sub_id}' in parents and mimeType = 'image/jpeg' and trashed = false"
@@ -85,9 +153,10 @@ def get_first_chapter_images(book_folder_id, limit=20):
     files = img_results.get('files', [])
     
     downloaded_images = []
-    print(f"⬇️ Downloading first {len(files)} pages for analysis...")
+    log(f"⬇️ Downloading first {len(files)} pages for analysis...")
+    terminal.update_progress(40, "Downloading Images...")
     
-    for f in files:
+    for i, f in enumerate(files):
         request = service.files().get_media(fileId=f['id'])
         fh = io.BytesIO()
         downloader = MediaIoBaseDownload(fh, request)
@@ -102,7 +171,8 @@ def get_first_chapter_images(book_folder_id, limit=20):
     return downloaded_images
 
 def analyze_toc(images):
-    print("🧠 Analyzing Visual Hierarchy with Gemini...")
+    terminal.update_progress(60, "Gemini Analyzing...")
+    log("🧠 Analyzing Visual Hierarchy with Gemini...")
     prompt = """
     Analyze these images to extract the MASTER TABLE OF CONTENTS.
     I need a nested JSON structure with Page Ranges.
@@ -113,8 +183,8 @@ def analyze_toc(images):
         "chapter_name": "Name of Chapter",
         "start_page": 5,
         "subtopics": [
-           {"name": "Subtopic 1", "start_page": 5},
-           {"name": "Subtopic 2", "start_page": 8}
+            {"name": "Subtopic 1", "start_page": 5},
+            {"name": "Subtopic 2", "start_page": 8}
         ]
       }
     ]
@@ -130,12 +200,13 @@ def analyze_toc(images):
         text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(text)
     except Exception as e:
-        print(f"❌ AI Analysis Failed: {e}")
+        log(f"❌ AI Analysis Failed: {e}")
         return []
 
 def calculate_ranges(toc_data):
     # Simple logic to infer end_page from the next chapter's start_page
-    print("Cc Calculating Page Ranges...")
+    terminal.update_progress(80, "Calculating Ranges...")
+    log("Cc Calculating Page Ranges...")
     for i, chap in enumerate(toc_data):
         start = int(chap.get('start_page', 0))
         
@@ -173,32 +244,41 @@ def upload_json(folder_id, filename, data):
     file_metadata = {'name': filename, 'parents': [folder_id]}
     media = MediaFileUpload(file_path, mimetype='application/json')
     
-    print(f"⬆️ Uploading {filename} to Drive...")
+    terminal.update_progress(90, "Uploading JSON...")
+    log(f"⬆️ Uploading {filename} to Drive...")
     service.files().create(body=file_metadata, media_body=media).execute()
-    print("✅ Upload Complete.")
+    log("✅ Upload Complete.")
 
 def main():
+    terminal.start()
+    
     # 1. Locate Folders
+    terminal.update_progress(10, "Locating Book...")
     root_id = get_folder_id(INPUT_ROOT)
     if not root_id:
-        print(f"❌ Could not find '{INPUT_ROOT}' in Drive.")
+        log(f"❌ Could not find '{INPUT_ROOT}' in Drive.")
+        terminal.update_progress(0, "ROOT MISSING")
         return
 
     book_id, book_name = get_latest_book_folder(root_id)
     if not book_id:
-        print("❌ No book folders found.")
+        log("❌ No book folders found.")
+        terminal.update_progress(0, "BOOK MISSING")
         return
 
-    print(f"📘 Processing Book: {book_name}")
+    log(f"📘 Processing Book: {book_name}")
+    terminal.update_progress(20, f"Found: {book_name}")
 
     # 2. Get Images
     images = get_first_chapter_images(book_id)
-    if not images: return
+    if not images: 
+        terminal.update_progress(0, "NO IMAGES")
+        return
 
     # 3. Analyze
     toc_data = analyze_toc(images)
     if not toc_data:
-        print("⚠️ AI could not find a Table of Contents.")
+        log("⚠️ AI could not find a Table of Contents.")
         # Create a dummy one so pipeline doesn't break
         toc_data = [{"chapter_name": "Full Book", "start_page": 1, "end_page": 999, "subtopics": []}]
 
@@ -209,7 +289,8 @@ def main():
     json_filename = f"{book_name}_index.json"
     upload_json(book_id, json_filename, final_data)
 
-    print("\n🎉 PHASE 2 COMPLETE: Index JSON created successfully.")
+    terminal.update_progress(100, "✅ ANALYSIS DONE")
+    log("\n🎉 PHASE 2 COMPLETE: Index JSON created successfully.")
 
 if __name__ == "__main__":
     main()
