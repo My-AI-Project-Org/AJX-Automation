@@ -98,7 +98,7 @@ jobs:
           python-version: '3.9'
           
       - name: Install Dependencies
-        run: pip install google-generativeai Pillow rich
+        run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib
 
       - name: Run Worker ${{ matrix.worker_id }}
         env:
