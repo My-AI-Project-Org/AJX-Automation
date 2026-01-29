@@ -47,6 +47,8 @@ jobs:
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
           USER_PROVIDED_INPUT: ${{ inputs.index_page_input }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python -u -W ignore phase1_smart_split.py
 
       # Saves Images for Phase 2
@@ -74,6 +76,10 @@ jobs:
           path: AJX_Phase1_Output
       
       - name: Run Phase 2 Config
+        env:
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python phase2_headless.py --exam "${{ inputs.exam_name }}" --subject "${{ inputs.subject }}"
       
       - name: Upload Config
@@ -119,6 +125,8 @@ jobs:
       - name: Run Worker ${{ matrix.worker_id }}
         env:
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}          
         run: python phase3_worker.py 10 ${{ matrix.worker_id }}
 
       - name: Upload Worker Output
@@ -156,4 +164,6 @@ jobs:
       - name: Sync to Firebase
         env:
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python phase4_sync.py
