@@ -223,7 +223,7 @@ def call_gemini(img_path, prompt, task_type="Generation"):
             
         except google_exceptions.ResourceExhausted:
             logger.log(f"🛑 Quota Hit. Waiting 30s...", notify=True)
-            time.sleep(30)
+            time.sleep(5)
             get_next_key()
         except Exception as e:
             if "429" in str(e):
