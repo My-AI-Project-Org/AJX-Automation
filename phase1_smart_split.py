@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 1: TITANIUM (SUMMARY STATS EDITION)    ║")
+print("║   AJX PHASE 1: PLATINUM (SUMMARY + NESTED)         ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -41,7 +41,7 @@ class TelegramTerminal:
 
     def start(self):
         if not self.token: return
-        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (TITANIUM)</b>\nInitializing...")
+        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (PLATINUM)</b>\nInitializing...")
 
     def log_stream(self, msg):
         clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
@@ -60,7 +60,7 @@ class TelegramTerminal:
         bar_len = 10
         filled = int(bar_len * self.current_progress / 100)
         bar = "█" * filled + "░" * (bar_len - filled)
-        text = (f"<b>💻 AJX PHASE 1 (TITANIUM)</b>\n<code>{logs_text}</code>\n"
+        text = (f"<b>💻 AJX PHASE 1 (PLATINUM)</b>\n<code>{logs_text}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
                 f"<code>[{bar}] {self.current_progress}%</code>")
         self._edit_msg(text)
@@ -220,10 +220,10 @@ def create_collage(image_list, labels, output_name):
     grid_img.save(output_name)
     return output_name
 
-# --- 📊 NEW FEATURE: STRUCTURE SUMMARY ---
+# --- 📊 STRUCTURE SUMMARY & COUNT ---
 def count_leaves(node):
-    """Recursively counts actual chapters (leaves) inside a unit."""
-    if not node.get('subtopics'):
+    """Recursively counts actual chapters inside a unit."""
+    if not node.get('subtopics') or len(node.get('subtopics')) == 0:
         return 1
     return sum(count_leaves(child) for child in node['subtopics'])
 
@@ -231,6 +231,7 @@ def print_structure_summary(toc_data):
     log("\n📊 STRUCTURE SUMMARY:")
     grand_total = 0
     for item in toc_data:
+        # Try finding the name safely
         name = item.get('chapter_name', item.get('name', item.get('unit_name', 'Unknown')))
         count = count_leaves(item)
         log(f"   🔹 {name}: {count} chapters")
@@ -243,29 +244,29 @@ def calculate_ranges_recursive(node_list, end_limit):
     for i, node in enumerate(node_list):
         raw_start = clean_page_num(node.get('start_page', 1))
         start_p = raw_start 
-        
         if i < len(node_list) - 1:
             raw_next = clean_page_num(node_list[i+1].get('start_page', start_p))
             next_p = raw_next
             end_p = max(start_p, next_p - 1)
         else:
             end_p = end_limit 
-            
         node['start_page'] = start_p
         node['end_page'] = end_p
-        
         if node.get('subtopics'):
             calculate_ranges_recursive(node['subtopics'], end_p)
 
+# 👇 NESTED FOLDER CREATION (The Core Logic)
 def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent_path):
     for i, node in enumerate(node_list):
         c_name = node.get('chapter_name', node.get('name', node.get('unit_name', f"Chapter_{i+1}")))
         folder_name = f"{str(i+1).zfill(2)}_{clean_filename(c_name)}"
+        
+        # Cloud & Local Create
         fid = create_folder(folder_name, parent_folder_id)
         local_path = os.path.join(local_parent_path, folder_name)
         os.makedirs(local_path, exist_ok=True)
         
-        if node.get('subtopics'):
+        if node.get('subtopics') and len(node['subtopics']) > 0:
             create_folders_recursive(node['subtopics'], fid, map_list, local_path)
         else:
             map_list.append({
@@ -290,7 +291,22 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     chunk_start, chunk_end = min(pages_to_read), max(pages_to_read)
     images = convert_from_path(pdf_name, first_page=chunk_start, last_page=chunk_end, dpi=300)
     
-    prompt = """Analyze TOC. Output JSON: [{"chapter_name": "Unit I", "start_page": 1, "subtopics": []}]"""
+    # Prompt ensures NESTED structure
+    prompt = """
+    Analyze the Table of Contents. 
+    Output a NESTED JSON structure.
+    If a Unit has Chapters, put them in 'subtopics'.
+    Example:
+    [
+        {
+            "chapter_name": "Unit I: Ancient History", 
+            "start_page": 5, 
+            "subtopics": [
+                {"chapter_name": "Stone Age", "start_page": 5, "subtopics": []}
+            ]
+        }
+    ]
+    """
     try:
         response = model.generate_content([prompt] + images)
         text = response.text.replace("```json", "").replace("```", "").strip()
@@ -388,7 +404,7 @@ def main():
         else:
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # 👇 NEW: PRINT SUMMARY STATS
+    # PRINT SUMMARY
     print_structure_summary(toc_data)
 
     terminal.update_progress(50, "Creating Folders...")
@@ -409,6 +425,7 @@ def main():
                 local_path = os.path.join(chap['local_path'], file_name)
                 img.save(local_path, "JPEG") 
                 
+                # SMART UPLOAD
                 if not file_exists_on_drive(file_name, chap['id']):
                     try:
                         file_meta = {'name': file_name, 'parents': [chap['id']]}
