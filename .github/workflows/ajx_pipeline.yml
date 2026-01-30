@@ -93,12 +93,12 @@ jobs:
   # PHASE 3: FACTORY (10 Workers)
   # ------------------------------------------------------------------
   phase3:
-    needs: phase1  # 👈 Phase 1 ke baad chalega (Images wahin se aayengi)
+    needs: phase1
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        worker_id: [1, 2, 3] # 👈 Updated: Sirf 3 Workers (Dedicated Keys ke liye)
+        worker_id: [1, 2, 3] # 👈 Sirf 3 Workers chalenge
 
     steps:
       - name: Checkout Code
@@ -110,7 +110,7 @@ jobs:
           python-version: '3.9'
           
       - name: Install Dependencies
-        # 👇 tqdm aur baki libs add kiye hain
+        # 👇 tqdm add kiya hai progress bar ke liye
         run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib tqdm
 
       - name: Download Images (From Phase 1)
@@ -121,24 +121,25 @@ jobs:
 
       - name: Run Worker ${{ matrix.worker_id }}
         env:
-          # 👇 MATRIX SETUP
+          # 👇 Worker Identification
           WORKER_ID: ${{ matrix.worker_id }}
-          TOTAL_WORKERS: 3  # 👈 Updated to 3
+          TOTAL_WORKERS: 3
           
-          # 👇 DEDICATED KEYS MAPPING (Jo Python script dhundegi)
+          # 👇 Dedicated Keys Mapping (Python script yahan se uthayegi)
           KEYS_WORKER_1: ${{ secrets.KEYS_WORKER_1 }}
           KEYS_WORKER_2: ${{ secrets.KEYS_WORKER_2 }}
           KEYS_WORKER_3: ${{ secrets.KEYS_WORKER_3 }}
           
-          # 👇 STANDARD SECRETS
+          # 👇 Common Secrets
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_KEY }} # ⚠️ Check name in Secrets
+          # ⚠️ Check: Agar aapka secret name 'FIREBASE_SERVICE_ACCOUNT' hai to wo likhen
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_KEY }} 
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         
-        # 👇 Command Updated: Arguments ki zarurat nahi, Env se uthayega
-        run: python phase3_processor.py 
+        # 👇 Correct Filename (Arguments ki zarurat nahi, env se lega)
+        run: python phase3_worker.py 
 
       - name: Upload Worker Output
         uses: actions/upload-artifact@v4
