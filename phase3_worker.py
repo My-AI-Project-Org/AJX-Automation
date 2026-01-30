@@ -396,6 +396,7 @@ def main():
             logger.log(f"   🔍 Analyzing {img_name}...", notify=True)
             est_count = analyze_image(img)
             target = min(MAX_QUESTIONS_TARGET, max(MIN_QUESTIONS_TARGET, est_count))
+            logger.log(f"   📊 AI Estimate: {est_count} | 🎯 Final Target: {target} MCQs", notify=True)
             
             success = False
             for attempt in range(MAX_RETRIES_PER_IMG):
