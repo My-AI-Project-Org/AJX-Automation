@@ -121,14 +121,14 @@ jobs:
 
       - name: Run Worker ${{ matrix.worker_id }}
         env:
+          WORKER_ID: ${{ matrix.worker_id }}
+          TOTAL_WORKERS: 10
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: "https://ajx-mcq-app-f5ba1-default-rtdb.firebaseio.com/"
-          WORKER_ID: ${{ matrix.worker_id }}
-          TOTAL_WORKERS: 10
         run: python phase3_worker.py 10 ${{ matrix.worker_id }}
 
       - name: Upload Worker Output
