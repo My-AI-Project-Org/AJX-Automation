@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 3: DEDICATED KEYS (3 WORKERS)          ║")
+print("║   AJX PHASE 3: VERIFICATION MODE (NO MISSING FILES)║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -27,8 +27,11 @@ OUTPUT_DIR = "AJX_Worker_Output"
 ZIP_DIR = "AJX_Ready_Packages"    
 PROMPT_FILE_NAME = 'master_prompt.txt'
 
+# Batching Settings
 MIN_QUESTIONS_TARGET = 30
 MAX_QUESTIONS_TARGET = 100 
+QUESTIONS_PER_PASS = 25 
+MAX_RETRIES_PER_IMG = 3 
 
 # GitHub Env
 TOTAL_WORKERS = int(os.environ.get("TOTAL_WORKERS", 3)) 
@@ -71,41 +74,29 @@ def init_services():
         return drive_service
     except: return None
 
-# --- 🟢 NEW LOGIC: LOAD SPECIFIC KEYS ---
+# --- LOAD KEYS ---
 def load_my_keys():
-    """Loads keys specifically assigned to THIS worker ID"""
     keys_str = ""
-    
-    if WORKER_ID == 1:
-        keys_str = os.environ.get("KEYS_WORKER_1", "[]")
-        logger.log("🔑 Loading Keys from List 1")
-    elif WORKER_ID == 2:
-        keys_str = os.environ.get("KEYS_WORKER_2", "[]")
-        logger.log("🔑 Loading Keys from List 2")
-    elif WORKER_ID == 3:
-        keys_str = os.environ.get("KEYS_WORKER_3", "[]")
-        logger.log("🔑 Loading Keys from List 3")
-    else:
-        # Fallback (Should not happen with 3 workers)
-        keys_str = os.environ.get("GEMINI_API_KEYS_LIST", "[]")
-        logger.log("⚠️ Using General Key List (Fallback)")
+    if WORKER_ID == 1: keys_str = os.environ.get("KEYS_WORKER_1", "[]")
+    elif WORKER_ID == 2: keys_str = os.environ.get("KEYS_WORKER_2", "[]")
+    elif WORKER_ID == 3: keys_str = os.environ.get("KEYS_WORKER_3", "[]")
+    else: keys_str = os.environ.get("GEMINI_API_KEYS_LIST", "[]")
 
     try:
         keys = json.loads(keys_str)
         if not keys: raise ValueError("Empty List")
         return keys
     except:
-        logger.log("❌ CRITICAL: Could not load API Keys!", notify=True)
+        logger.log("❌ CRITICAL: No Keys Found!", notify=True)
         exit(1)
 
 api_keys = load_my_keys()
 key_lock = threading.Lock()
-current_key_index = 0 # Har worker apni list ke 0 index se shuru karega
+current_key_index = 0 
 
 def get_next_key():
     global current_key_index
     with key_lock:
-        # Simple Rotation because list is PRIVATE to this worker
         current_key_index = (current_key_index + 1) % len(api_keys)
         logger.log(f"🔄 Switching Key -> Index {current_key_index}", notify=False)
         return api_keys[current_key_index]
@@ -113,11 +104,10 @@ def get_next_key():
 def get_current_key():
     with key_lock: return api_keys[current_key_index]
 
-# --- LOGIC: NATURAL SORT ---
+# --- HELPERS ---
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
-# --- LOGIC: JSON CLEANER ---
 def clean_json_response(text):
     text = text.strip()
     start = text.find('[')
@@ -156,7 +146,6 @@ def call_gemini(img_path, prompt, task_type="Generation"):
     max_key_tries = len(api_keys)
     for _ in range(max_key_tries):
         try:
-            # 3 Workers = Low traffic, so smaller sleep is okay
             time.sleep(random.uniform(2, 4)) 
             
             genai.configure(api_key=get_current_key())
@@ -186,29 +175,53 @@ def call_gemini(img_path, prompt, task_type="Generation"):
                 return None
     return None
 
-# --- ANALYSIS & GEN ---
+# --- MULTI-PASS LOGIC ---
 def analyze_image(img_path):
     prompt = "Analyze this image and estimate the total number of unique, high-quality MCQs possible. Provide only a single integer number as your answer."
     response = call_gemini(img_path, prompt, "Analysis")
     try: return int(response.strip())
     except: return 30 
 
-def generate_questions(img_path, target_count, master_prompt):
-    final_prompt = f"""
-    {master_prompt}
-    **CRITICAL INSTRUCTION:**
-    You MUST create exactly {target_count} unique MCQs from this image.
-    Do not stop early. Ensure strict JSON array format.
-    """
-    response = call_gemini(img_path, final_prompt, "Generation")
-    if not response: return None
+def generate_questions_multipass(img_path, target_count, master_prompt):
+    all_questions = []
     
-    clean_text = clean_json_response(response)
-    if clean_text.startswith("[") and clean_text.endswith("]"): 
-        return clean_text
-    return None
+    while len(all_questions) < target_count:
+        remaining = target_count - len(all_questions)
+        batch_size = min(QUESTIONS_PER_PASS, remaining)
+        start_id = len(all_questions) + 1
+        
+        pass_prompt = f"""
+        {master_prompt}
+        **BATCH INSTRUCTION:**
+        - Create exactly {batch_size} NEW unique MCQs.
+        - Start Question IDs from: {start_id}
+        - Return strictly a JSON array.
+        """
+        
+        logger.log(f"      ↳ Batch: requesting {batch_size} Qs (Total so far: {len(all_questions)})", notify=False)
+        
+        batch_success = False
+        for attempt in range(2): 
+            response = call_gemini(img_path, pass_prompt, "Generation")
+            if response:
+                clean = clean_json_response(response)
+                try:
+                    new_qs = json.loads(clean)
+                    if isinstance(new_qs, list) and new_qs:
+                        all_questions.extend(new_qs)
+                        batch_success = True
+                        break
+                except: pass
+            
+            if not batch_success:
+                time.sleep(2)
+        
+        if not batch_success:
+            break # Stop passes if one fails hard
+            
+    return json.dumps(all_questions, indent=2) if all_questions else None
 
-# --- SYNC ---
+# --- SYNC & ZIP ---
 def sync_chapter(drive_service, chapter_name, zip_path):
     if not drive_service: return
     try:
@@ -261,21 +274,18 @@ def main():
     drive = init_services()
     master_prompt = get_prompt()
     
-    logger.log(f"🚀 Worker {WORKER_ID} Started (Dedicated Keys)", notify=True)
+    logger.log(f"🚀 Worker {WORKER_ID} Started (Self-Verify Mode)", notify=True)
 
-    # 1. Find Chapters
     all_chapters = []
     for root, dirs, files in os.walk(INPUT_DIR):
         if any(f.endswith('.jpg') for f in files):
             all_chapters.append(root)
-    
     all_chapters.sort(key=lambda x: natural_sort_key(os.path.basename(x)))
 
     if not all_chapters:
         logger.log("❌ No chapters found.", notify=True)
         return
 
-    # 2. Matrix Assign
     my_chapters = []
     for i, chap in enumerate(all_chapters):
         if (i % TOTAL_WORKERS) == (WORKER_ID - 1):
@@ -283,7 +293,6 @@ def main():
 
     logger.log(f"📚 Assigned {len(my_chapters)} chapters", notify=True)
 
-    # 3. Process Loop
     for idx, chapter_path in enumerate(my_chapters):
         chapter_name = os.path.basename(chapter_path)
         logger.log(f"📂 [{idx+1}/{len(my_chapters)}] Starting: {chapter_name}", notify=True)
@@ -293,6 +302,7 @@ def main():
         images = [os.path.join(chapter_path, f) for f in os.listdir(chapter_path) if f.endswith('.jpg')]
         images.sort(key=lambda x: natural_sort_key(os.path.basename(x)))
         
+        # --- PASS 1: STANDARD PROCESSING ---
         for i, img in enumerate(images):
             img_name = os.path.basename(img)
             rel_path = os.path.relpath(img, INPUT_DIR)
@@ -303,20 +313,47 @@ def main():
                 continue
             
             os.makedirs(os.path.dirname(json_out), exist_ok=True)
-            
             logger.log(f"   🔍 Analyzing {img_name}...", notify=False)
             est_count = analyze_image(img)
             target = min(MAX_QUESTIONS_TARGET, max(MIN_QUESTIONS_TARGET, est_count))
             
-            logger.log(f"      ↳ Generating {target} MCQs...", notify=False)
-            result = generate_questions(img, target, master_prompt)
-            
-            if result:
-                with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
-                logger.log(f"      ✅ Success!", notify=False)
-            else:
-                logger.log(f"      ❌ Failed: {img_name}", notify=True)
+            # Retry Loop
+            for attempt in range(MAX_RETRIES_PER_IMG):
+                logger.log(f"      ↳ Attempt {attempt+1}/{MAX_RETRIES_PER_IMG}", notify=False)
+                result = generate_questions_multipass(img, target, master_prompt)
+                if result:
+                    with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
+                    logger.log(f"      ✅ Success!", notify=False)
+                    break
         
+        # --- 🕵️‍♂️ PASS 2: FINAL AUDIT (VERIFICATION) ---
+        # "Zip karne se pehle check karo ki sab kuch hai ya nahi"
+        missing_images = []
+        for img in images:
+            rel_path = os.path.relpath(img, INPUT_DIR)
+            json_out = os.path.join(OUTPUT_DIR, rel_path).replace(".jpg", ".json")
+            if not os.path.exists(json_out):
+                missing_images.append(img)
+        
+        if missing_images:
+            logger.log(f"⚠️ Chapter Incomplete! {len(missing_images)} images failed. Retrying...", notify=True)
+            
+            for img in missing_images:
+                img_name = os.path.basename(img)
+                rel_path = os.path.relpath(img, INPUT_DIR)
+                json_out = os.path.join(OUTPUT_DIR, rel_path).replace(".jpg", ".json")
+                
+                logger.log(f"   🔄 Final Retry for: {img_name}", notify=False)
+                # Force attempt with default safety target
+                result = generate_questions_multipass(img, 30, master_prompt) 
+                if result:
+                    with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
+                    logger.log(f"      ✅ Recovered: {img_name}", notify=False)
+                else:
+                    logger.log(f"      ❌ Give Up: {img_name} is broken/unreadable", notify=False)
+
+        # --- SYNC ---
+        # Ab jo bhi haal hai, Zip karke bhej do
         zp = zip_chapter_local(chapter_path)
         if zp: sync_chapter(drive, chapter_name, zp)
 
