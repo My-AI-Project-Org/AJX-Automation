@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 1: PURE (NO OFFSET + SMART SYNC)       ║")
+print("║   AJX PHASE 1: TITANIUM (SUMMARY STATS EDITION)    ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -41,7 +41,7 @@ class TelegramTerminal:
 
     def start(self):
         if not self.token: return
-        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (PURE)</b>\nInitializing...")
+        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (TITANIUM)</b>\nInitializing...")
 
     def log_stream(self, msg):
         clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
@@ -60,7 +60,7 @@ class TelegramTerminal:
         bar_len = 10
         filled = int(bar_len * self.current_progress / 100)
         bar = "█" * filled + "░" * (bar_len - filled)
-        text = (f"<b>💻 AJX PHASE 1 (PURE)</b>\n<code>{logs_text}</code>\n"
+        text = (f"<b>💻 AJX PHASE 1 (TITANIUM)</b>\n<code>{logs_text}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
                 f"<code>[{bar}] {self.current_progress}%</code>")
         self._edit_msg(text)
@@ -178,7 +178,6 @@ def download_json(folder_id, json_name):
     fh.seek(0)
     return json.load(fh)
 
-# --- 🚀 SMART UPLOAD (CHECK EXISTS) ---
 def file_exists_on_drive(file_name, parent_id):
     query = f"name = '{file_name}' and '{parent_id}' in parents and trashed = false"
     results = service.files().list(q=query, fields="files(id)").execute()
@@ -221,18 +220,32 @@ def create_collage(image_list, labels, output_name):
     grid_img.save(output_name)
     return output_name
 
-# --- RECURSIVE LOGIC (NO OFFSET) ---
+# --- 📊 NEW FEATURE: STRUCTURE SUMMARY ---
+def count_leaves(node):
+    """Recursively counts actual chapters (leaves) inside a unit."""
+    if not node.get('subtopics'):
+        return 1
+    return sum(count_leaves(child) for child in node['subtopics'])
+
+def print_structure_summary(toc_data):
+    log("\n📊 STRUCTURE SUMMARY:")
+    grand_total = 0
+    for item in toc_data:
+        name = item.get('chapter_name', item.get('name', item.get('unit_name', 'Unknown')))
+        count = count_leaves(item)
+        log(f"   🔹 {name}: {count} chapters")
+        grand_total += count
+    log(f"   🏆 TOTAL: {grand_total} Chapters to process.\n")
+
+# --- RECURSIVE LOGIC ---
 def calculate_ranges_recursive(node_list, end_limit):
     node_list.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
     for i, node in enumerate(node_list):
         raw_start = clean_page_num(node.get('start_page', 1))
-        
-        # 👇 NO OFFSET APPLIED HERE
         start_p = raw_start 
         
         if i < len(node_list) - 1:
             raw_next = clean_page_num(node_list[i+1].get('start_page', start_p))
-            # 👇 NO OFFSET APPLIED HERE
             next_p = raw_next
             end_p = max(start_p, next_p - 1)
         else:
@@ -246,10 +259,12 @@ def calculate_ranges_recursive(node_list, end_limit):
 
 def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent_path):
     for i, node in enumerate(node_list):
-        folder_name = f"{str(i+1).zfill(2)}_{clean_filename(node['chapter_name'])}"
+        c_name = node.get('chapter_name', node.get('name', node.get('unit_name', f"Chapter_{i+1}")))
+        folder_name = f"{str(i+1).zfill(2)}_{clean_filename(c_name)}"
         fid = create_folder(folder_name, parent_folder_id)
         local_path = os.path.join(local_parent_path, folder_name)
         os.makedirs(local_path, exist_ok=True)
+        
         if node.get('subtopics'):
             create_folders_recursive(node['subtopics'], fid, map_list, local_path)
         else:
@@ -257,7 +272,7 @@ def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent
                 'start': int(node['start_page']),
                 'end': int(node['end_page']),
                 'id': fid,
-                'name': node['chapter_name'],
+                'name': c_name,
                 'local_path': local_path
             })
 
@@ -283,10 +298,9 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     except:
         toc_data = [{"chapter_name": "Full_Book", "start_page": 1, "subtopics": []}]
         
-    log("Cc Calculating Ranges (No Offset)...")
+    log("Cc Calculating Ranges...")
     calculate_ranges_recursive(toc_data, total_pages)
 
-    # Save and Upload JSON
     with open(json_name, 'w', encoding='utf-8') as f:
         json.dump(toc_data, f, indent=4, ensure_ascii=False)
     
@@ -348,7 +362,7 @@ def main():
     book_name = pdf_name.replace('.pdf', '')
     book_folder_id = create_folder(book_name, out_id)
 
-    # 1. CLEAN LOCAL ARTIFACTS
+    # 1. CLEAN LOCAL
     if os.path.exists(LOCAL_OUTPUT_DIR): 
         shutil.rmtree(LOCAL_OUTPUT_DIR)
     os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
@@ -374,7 +388,9 @@ def main():
         else:
             toc_data = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # GENERATE STRUCTURE
+    # 👇 NEW: PRINT SUMMARY STATS
+    print_structure_summary(toc_data)
+
     terminal.update_progress(50, "Creating Folders...")
     chapter_map = [] 
     create_folders_recursive(toc_data, book_folder_id, chapter_map, LOCAL_OUTPUT_DIR)
@@ -386,23 +402,20 @@ def main():
         percent = 60 + int((i / total_chaps) * 40)
         terminal.update_progress(percent, f"Active: {chap['name']}")
         
-        expected_count = chap['end'] - chap['start'] + 1
-        
         try:
             images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
             for idx, img in enumerate(images):
                 file_name = f"{idx + 1}.jpg"
                 local_path = os.path.join(chap['local_path'], file_name)
-                img.save(local_path, "JPEG")
+                img.save(local_path, "JPEG") 
                 
-                # SMART UPLOAD (Only if missing on Drive)
                 if not file_exists_on_drive(file_name, chap['id']):
                     try:
                         file_meta = {'name': file_name, 'parents': [chap['id']]}
                         media = MediaFileUpload(local_path, mimetype='image/jpeg')
                         service.files().create(body=file_meta, media_body=media).execute()
                     except: pass 
-            log(f"   ✅ Generated: {chap['name']}")
+            log(f"   ✅ Processed: {chap['name']}")
         except Exception as e:
             log(f"   ❌ Error: {e}")
 
