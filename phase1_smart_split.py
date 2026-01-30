@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 1: ULTIMATE (COLLAGE + OFFSET + SYNC)  ║")
+print("║   AJX PHASE 1: SMART SYNC (SKIP EXISTING DRIVE)    ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -20,15 +20,15 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import google.generativeai as genai
 from pdf2image import convert_from_path, pdfinfo_from_path
-from PIL import Image, ImageDraw
+from PIL import Image
 
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
-OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output' # Drive Folder Name
-LOCAL_OUTPUT_DIR = 'AJX_Phase1_Output'   # Local Folder for GitHub Artifacts
+OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
+LOCAL_OUTPUT_DIR = 'AJX_Phase1_Output'
 USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
-# --- 🟢 LIVE TELEGRAM TERMINAL SYSTEM ---
+# --- 🟢 TELEGRAM TERMINAL ---
 class TelegramTerminal:
     def __init__(self):
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -41,7 +41,7 @@ class TelegramTerminal:
 
     def start(self):
         if not self.token: return
-        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (ULTIMATE)</b>\nInitializing...")
+        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (SMART)</b>\nInitializing...")
 
     def log_stream(self, msg):
         clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
@@ -60,7 +60,7 @@ class TelegramTerminal:
         bar_len = 10
         filled = int(bar_len * self.current_progress / 100)
         bar = "█" * filled + "░" * (bar_len - filled)
-        text = (f"<b>💻 AJX PHASE 1 (ULTIMATE)</b>\n<code>{logs_text}</code>\n"
+        text = (f"<b>💻 AJX PHASE 1 (SMART)</b>\n<code>{logs_text}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
                 f"<code>[{bar}] {self.current_progress}%</code>")
         self._edit_msg(text)
@@ -126,7 +126,6 @@ def clean_page_num(value):
 def clean_filename(name):
     return "".join(c for c in name if c.isalnum() or c in (' ', '_', '-')).strip()[:40]
 
-# --- DRIVE UTILS ---
 def get_folder_id(folder_name, parent_id=None):
     query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
     if parent_id: query += f" and '{parent_id}' in parents"
@@ -150,6 +149,9 @@ def download_latest_pdf(folder_id):
     return items[0]['name'], items[0]['id']
 
 def perform_download(file_id, file_name):
+    if os.path.exists(file_name):
+        log(f"⚡ Using existing PDF: {file_name}")
+        return
     log(f"⬇️ Downloading PDF: {file_name}...")
     request = service.files().get_media(fileId=file_id)
     fh = io.FileIO(file_name, 'wb')
@@ -176,7 +178,13 @@ def download_json(folder_id, json_name):
     fh.seek(0)
     return json.load(fh)
 
-# --- COLLAGE & PREVIEW UTILS ---
+# --- 🚀 SMART UPLOAD (CHECK EXISTS) ---
+def file_exists_on_drive(file_name, parent_id):
+    """Checks if file exists to avoid duplicate upload."""
+    query = f"name = '{file_name}' and '{parent_id}' in parents and trashed = false"
+    results = service.files().list(q=query, fields="files(id)").execute()
+    return len(results.get('files', [])) > 0
+
 def cleanup_previews(folder_id):
     query = f"'{folder_id}' in parents and (name contains 'COLLAGE' or name contains 'PREVIEW') and trashed = false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
@@ -187,7 +195,6 @@ def cleanup_previews(folder_id):
             except: pass
 
 def cleanup_final_collage(book_folder_id):
-    log("\n🧹 Final Cleanup...")
     query = f"'{book_folder_id}' in parents and name contains 'COLLAGE' and trashed = false"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     files = results.get('files', [])
@@ -215,51 +222,10 @@ def create_collage(image_list, labels, output_name):
     grid_img.save(output_name)
     return output_name
 
-def find_and_preview_index(pdf_name, book_folder_id):
-    terminal.update_progress(15, "Scouting Index...")
-    log("\n🕵️ MODE 1: SCOUTING FOR INDEX...")
-    cleanup_previews(book_folder_id)
-    
-    # Scout first 50 pages for TOC
-    images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
-    prompt = """Identify TOP 4 pages that look like the Table of Contents. Output JSON: {"candidate_pages": [5, 6]}"""
-    try:
-        response = model.generate_content([prompt] + images[:30])
-        text = response.text.replace("```json", "").replace("```", "").strip()
-        candidate_pages = json.loads(text).get('candidate_pages', [1,2,3,4])
-    except: candidate_pages = [1, 2, 3, 4]
-
-    if not candidate_pages: candidate_pages = [1, 2, 3, 4]
-    candidate_pages = list(dict.fromkeys(candidate_pages))[:4]
-    
-    collage_images = []
-    valid_labels = []
-    for p in candidate_pages:
-        idx = int(p) - 1
-        if idx < len(images):
-            collage_images.append(images[idx])
-            valid_labels.append(p)
-    
-    if collage_images:
-        preview_name = "INDEX_CANDIDATES_COLLAGE.jpg"
-        create_collage(collage_images, valid_labels, preview_name)
-        file_meta = {'name': preview_name, 'parents': [book_folder_id]}
-        media = MediaFileUpload(preview_name, mimetype='image/jpeg')
-        file = service.files().create(body=file_meta, media_body=media, fields='id, webViewLink').execute()
-        
-        link = file.get('webViewLink')
-        terminal.update_progress(100, "🛑 ACTION REQUIRED")
-        log("\n" + "="*60)
-        log(f"🔗 CLICK LINK: {link}")
-        log("="*60 + "\n")
-        terminal.log_stream(f"🔗 Check Link: {link}")
-
-# --- 🧠 LOGIC 1: ROBUST OFFSET DETECTION ---
+# --- 🧠 OFFSET DETECTION ---
 def detect_initial_offset(pdf_name):
-    """Scans first 30 pages to find where 'Page 1' is printed."""
     terminal.update_progress(10, "Detecting Offset...")
     log("🧠 Deep Scan: Detecting Page Offset (First 30 Pages)...")
-    
     try:
         images = convert_from_path(pdf_name, first_page=1, last_page=30, dpi=100)
         prompt = """
@@ -270,7 +236,6 @@ def detect_initial_offset(pdf_name):
         response = model.generate_content([prompt] + images)
         text = response.text.replace("```json", "").replace("```", "").strip()
         
-        # Handle INT vs JSON response
         real_page_index = 0
         try:
             data = json.loads(text)
@@ -279,8 +244,7 @@ def detect_initial_offset(pdf_name):
             elif isinstance(data, int):
                 real_page_index = data
         except:
-            if text.isdigit():
-                real_page_index = int(text)
+            if text.isdigit(): real_page_index = int(text)
         
         if real_page_index > 0:
             offset = real_page_index - 1
@@ -293,27 +257,20 @@ def detect_initial_offset(pdf_name):
         log(f"⚠️ Offset Check Failed (Safe Fallback): {e}")
         return 0
 
-# --- 🧠 LOGIC 2: POST-GENERATION AUDIT ---
 def audit_folders(chapter_map, pdf_name, offset):
     terminal.update_progress(95, "Running Final Audit...")
     log("\n🕵️ FINAL AUDIT: Checking for Mismatches...")
-    
     if len(chapter_map) > 2:
         test_chap = chapter_map[len(chapter_map)//2]
     else:
         test_chap = chapter_map[0] if chapter_map else None
-    
     if not test_chap: return
-    
     local_files = sorted([f for f in os.listdir(test_chap['local_path']) if f.endswith('.jpg')])
-    
     if not local_files:
         log("⚠️ Audit Skipped: No images found.")
         return
-
     test_img_path = os.path.join(test_chap['local_path'], local_files[0])
     prompt = f"Does this image contain the text '{test_chap['name']}' or related content? Answer YES or NO."
-    
     try:
         img = Image.open(test_img_path)
         response = model.generate_content([prompt, img])
@@ -330,19 +287,15 @@ def calculate_ranges_recursive(node_list, end_limit, offset):
     node_list.sort(key=lambda x: clean_page_num(x.get('start_page', 1)))
     for i, node in enumerate(node_list):
         raw_start = clean_page_num(node.get('start_page', 1))
-        # APPLY OFFSET
-        start_p = raw_start + offset
-        
+        start_p = raw_start + offset 
         if i < len(node_list) - 1:
             raw_next = clean_page_num(node_list[i+1].get('start_page', start_p))
             next_p = raw_next + offset
             end_p = max(start_p, next_p - 1)
         else:
             end_p = end_limit 
-            
         node['start_page'] = start_p
         node['end_page'] = end_p
-        
         if node.get('subtopics'):
             calculate_ranges_recursive(node['subtopics'], end_p, offset)
 
@@ -352,7 +305,6 @@ def create_folders_recursive(node_list, parent_folder_id, map_list, local_parent
         fid = create_folder(folder_name, parent_folder_id)
         local_path = os.path.join(local_parent_path, folder_name)
         os.makedirs(local_path, exist_ok=True)
-        
         if node.get('subtopics'):
             create_folders_recursive(node['subtopics'], fid, map_list, local_path)
         else:
@@ -369,7 +321,6 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     terminal.update_progress(30, "AI Analyzing TOC...")
     log(f"\n🏗️ MODE 2: BUILDING INDEX FROM RANGE '{input_str}'...")
     
-    # 1. Detect Offset (Robust)
     offset = detect_initial_offset(pdf_name)
     
     if "-" in input_str:
@@ -396,81 +347,98 @@ def generate_index_from_range(pdf_name, input_str, total_pages, book_folder_id, 
     with open(json_name, 'w', encoding='utf-8') as f:
         json.dump(toc_data, f, indent=4, ensure_ascii=False)
     
-    file_meta = {'name': json_name, 'parents': [book_folder_id]}
-    media = MediaFileUpload(json_name, mimetype='application/json')
-    service.files().create(body=file_meta, media_body=media).execute()
-    log(f"✅ JSON Created: {json_name}")
+    if not file_exists_on_drive(json_name, book_folder_id):
+        file_meta = {'name': json_name, 'parents': [book_folder_id]}
+        media = MediaFileUpload(json_name, mimetype='application/json')
+        service.files().create(body=file_meta, media_body=media).execute()
+        log(f"✅ JSON Created & Uploaded")
+    else:
+        log(f"⚡ JSON already on Drive.")
+    
     return toc_data, offset
+
+def find_and_preview_index(pdf_name, book_folder_id):
+    terminal.update_progress(15, "Scouting Index...")
+    log("\n🕵️ MODE 1: SCOUTING FOR INDEX...")
+    cleanup_previews(book_folder_id)
+    images = convert_from_path(pdf_name, first_page=1, last_page=50, dpi=100)
+    prompt = """Identify TOP 4 pages that look like the Table of Contents. Output JSON: {"candidate_pages": [5, 6]}"""
+    try:
+        response = model.generate_content([prompt] + images[:30])
+        text = response.text.replace("```json", "").replace("```", "").strip()
+        candidate_pages = json.loads(text).get('candidate_pages', [1,2,3,4])
+    except: candidate_pages = [1, 2, 3, 4]
+    
+    if not candidate_pages: candidate_pages = [1, 2, 3, 4]
+    candidate_pages = list(dict.fromkeys(candidate_pages))[:4]
+    
+    collage_images = []
+    valid_labels = []
+    for p in candidate_pages:
+        idx = int(p) - 1
+        if idx < len(images):
+            collage_images.append(images[idx])
+            valid_labels.append(p)
+            
+    if collage_images:
+        preview_name = "INDEX_CANDIDATES_COLLAGE.jpg"
+        create_collage(collage_images, valid_labels, preview_name)
+        file_meta = {'name': preview_name, 'parents': [book_folder_id]}
+        media = MediaFileUpload(preview_name, mimetype='image/jpeg')
+        file = service.files().create(body=file_meta, media_body=media, fields='id, webViewLink').execute()
+        link = file.get('webViewLink')
+        terminal.update_progress(100, "🛑 ACTION REQUIRED")
+        log("\n" + "="*60 + f"\n🔗 CLICK LINK: {link}\n" + "="*60)
+        terminal.log_stream(f"🔗 Check Link: {link}")
 
 def main():
     terminal.start()
     in_id = get_folder_id(INPUT_FOLDER_NAME)
+    out_id = create_folder(OUTPUT_FOLDER_NAME, None)
     
-    out_id = get_folder_id(OUTPUT_FOLDER_NAME)
-    if not out_id:
-        log(f"📁 Creating Missing Output Folder: {OUTPUT_FOLDER_NAME}")
-        out_id = create_folder(OUTPUT_FOLDER_NAME, None)
+    if not in_id: log("❌ Input folder missing!"); return
 
-    if not in_id: 
-        log("❌ Fatal: AJX_Input folder missing!")
-        terminal.update_progress(0, "INPUT MISSING")
-        return
-
-    terminal.update_progress(5, "Searching PDF...")
     log("🔍 Looking for PDF...")
     pdf_name, pdf_id = download_latest_pdf(in_id)
-    if not pdf_name: 
-        log("❌ No PDF found in AJX_Input")
-        terminal.update_progress(0, "NO PDF FOUND")
-        return
+    if not pdf_name: log("❌ No PDF found."); return
 
     book_name = pdf_name.replace('.pdf', '')
-    json_name = f"{book_name}_index.json"
     book_folder_id = create_folder(book_name, out_id)
 
-    if os.path.exists(LOCAL_OUTPUT_DIR): shutil.rmtree(LOCAL_OUTPUT_DIR)
+    # 1. CLEAN LOCAL ARTIFACTS (Fresh start for GitHub Runner)
+    if os.path.exists(LOCAL_OUTPUT_DIR): 
+        shutil.rmtree(LOCAL_OUTPUT_DIR)
     os.makedirs(LOCAL_OUTPUT_DIR, exist_ok=True)
+
+    # 2. DOWNLOAD PDF FORCEFULLY (Fix for Offset Error)
+    perform_download(pdf_id, pdf_name)
+    try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
+    except: total_pages = 500
 
     toc_data = []
     offset = 0
-    
-    # --- TASK 1: JSON CHECK (Original Feature) ---
+    json_name = f"{book_name}_index.json"
+
+    # MODE CHECK
     if check_json_exists(book_folder_id, json_name):
-        log("✅ Task 1: JSON Index exists. Skipping AI.")
+        log("✅ JSON Index exists. Loading...")
         terminal.update_progress(20, "Loading JSON...")
         toc_data = download_json(book_folder_id, json_name)
-        # Even if JSON exists, we might want to check offset for auditing, 
-        # but for speed, let's assume JSON implies processing is done or ready to be mapped.
-        # But we still need offset for the Audit step later.
         offset = detect_initial_offset(pdf_name) 
-
     else:
-        # JSON Missing -> Check Input
         if not USER_INPUT_STR:
-            log("⚠️ No Page Range Provided. Starting SCOUT MODE...")
-            perform_download(pdf_id, pdf_name)
+            log("⚠️ No Page Range. Starting SCOUT MODE...")
             find_and_preview_index(pdf_name, book_folder_id)
-            log("\n🛑 STOPPING for User Input. Check Telegram Link.")
-            return 
+            log("\n🛑 STOPPING for User Input."); return 
         else:
-            log(f"⚠️ Page Range Found: {USER_INPUT_STR}")
-            perform_download(pdf_id, pdf_name)
-            try: info = pdfinfo_from_path(pdf_name); total_pages = int(info["Pages"])
-            except: total_pages = 500
             toc_data, offset = generate_index_from_range(pdf_name, USER_INPUT_STR, total_pages, book_folder_id, json_name)
 
-    # --- TASK 2: FOLDER VERIFICATION ---
+    # GENERATE STRUCTURE
     terminal.update_progress(50, "Creating Folders...")
-    log("\n📂 Task 2: Verifying Folder Structure...")
     chapter_map = [] 
     create_folders_recursive(toc_data, book_folder_id, chapter_map, LOCAL_OUTPUT_DIR)
-    log(f"✅ Task 2 Complete: Mapped {len(chapter_map)} folders.")
-
-    # --- TASK 3: IMAGE VERIFICATION (FORCE LOCAL GENERATION) ---
-    log("\n🚀 Task 3: Verifying Images...")
-    if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
     
-    all_complete = True
+    log("\n🚀 Verifying Images (Clean Slate Protocol)...")
     total_chaps = len(chapter_map)
     
     for i, chap in enumerate(chapter_map):
@@ -479,49 +447,32 @@ def main():
         
         expected_count = chap['end'] - chap['start'] + 1
         
-        # 👇 CHANGED LOGIC: Check LOCAL files
-        local_files = [f for f in os.listdir(chap['local_path']) if f.endswith('.jpg')]
-        local_count = len(local_files)
-        
-        log(f"   -> Checking [{chap['name']}] (Local: {local_count}/{expected_count})")
-        
-        # Force Generation if Local Count is low (Even if Cloud has them)
-        if local_count < expected_count:
-            all_complete = False
-            log(f"      ⚠️ Generating Local Images...")
-            try:
-                images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
-                for idx, img in enumerate(images):
-                    file_num = idx + 1
-                    file_name = f"{file_num}.jpg"
-                    
-                    # 1. Save Local (CRITICAL)
-                    final_local_path = os.path.join(chap['local_path'], file_name)
-                    img.save(final_local_path, "JPEG")
-                    
-                    # 2. Upload to Drive (Optional)
+        # Always Generate Local (Required for Phase 3)
+        try:
+            images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
+            for idx, img in enumerate(images):
+                file_name = f"{idx + 1}.jpg"
+                local_path = os.path.join(chap['local_path'], file_name)
+                img.save(local_path, "JPEG")
+                
+                # 3. SMART DRIVE SYNC (Only upload if missing)
+                if not file_exists_on_drive(file_name, chap['id']):
                     try:
                         file_meta = {'name': file_name, 'parents': [chap['id']]}
-                        media = MediaFileUpload(final_local_path, mimetype='image/jpeg')
+                        media = MediaFileUpload(local_path, mimetype='image/jpeg')
                         service.files().create(body=file_meta, media_body=media).execute()
-                    except: pass
-                    
-                log(f"      🎉 Generated {len(images)} images.")
-            except Exception as e:
-                log(f"      ❌ Error converting chapter: {e}")
-        else:
-             log("      ✅ Local Images Ready.")
+                    except: pass 
+            log(f"   ✅ Processed: {chap['name']}")
+        except Exception as e:
+            log(f"   ❌ Error: {e}")
 
-    if all_complete:
-        # Run Audit only if we actually have content
+    cleanup_final_collage(book_folder_id)
+    
+    if offset > 0:
         audit_folders(chapter_map, pdf_name, offset)
         
-        cleanup_final_collage(book_folder_id)
-        terminal.update_progress(100, "✅ PHASE 1 DONE")
-        log("\n🎉 ALL TASKS COMPLETE! Ready for Phase 2.")
-    else:
-        terminal.update_progress(100, "✅ CYCLE DONE")
-        log("\n✅ CYCLE COMPLETE. Please check logs.")
+    terminal.update_progress(100, "✅ PHASE 1 COMPLETE")
+    log("🎉 All Done. Artifacts Ready & Drive Synced.")
 
 if __name__ == "__main__":
     main()
