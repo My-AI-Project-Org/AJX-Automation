@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 4: CLOUD SYNC & DISPATCH (TELEGRAM)    ║")
+print("║   AJX PHASE 4: FINAL SYNC & DISPATCH (COMPLETE)    ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -19,10 +19,10 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
 # --- CONFIG ---
-INPUT_ROOT = 'AJX_OUTPUT_Phase2' 
+# Phase 3 writes here, so Phase 4 reads from here
+INPUT_ROOT = 'AJX_Worker_Output' 
 BACKUP_DRIVE_FOLDER = 'AJX_Phase4_Backup'
-# 👇 Correct API URL (Console URL nahi chalega)
-DEFAULT_DB_URL = "https://ajx-mcq-app-f5ba1-default-rtdb.firebaseio.com/" 
+DEFAULT_DB_URL = os.environ.get("FIREBASE_DB_URL") 
 
 # --- 🟢 LIVE TELEGRAM TERMINAL SYSTEM ---
 class TelegramTerminal:
@@ -79,27 +79,26 @@ class TelegramTerminal:
             urllib.request.urlopen(urllib.request.Request(url, data=data))
         except: pass
 
-# Initialize Terminal
 terminal = TelegramTerminal()
-
 def log(msg):
     print(msg)
     sys.stdout.flush()
     terminal.log_stream(msg)
 
 # --- AUTH SETUP ---
-firebase_key = os.environ.get("FIREBASE_SERVICE_KEY")
+firebase_key = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
 drive_key = os.environ.get("GDRIVE_OAUTH_JSON")
 
 if not firebase_key or not drive_key:
-    log("❌ Error: Secrets missing (FIREBASE or GDRIVE)")
+    log("❌ Error: Secrets missing")
     exit(1)
 
 # 1. Init Firebase
 try:
-    cred = credentials.Certificate(json.loads(firebase_key))
-    db_url = os.environ.get("FIREBASE_DB_URL", DEFAULT_DB_URL)
-    firebase_admin.initialize_app(cred, {'databaseURL': db_url})
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(json.loads(firebase_key))
+        db_url = DEFAULT_DB_URL if DEFAULT_DB_URL else "https://YOUR-APP.firebaseio.com/"
+        firebase_admin.initialize_app(cred, {'databaseURL': db_url})
     log("✅ Firebase Connected")
 except Exception as e:
     log(f"⚠️ Firebase Init Warning: {e}")
@@ -130,13 +129,18 @@ def get_or_create_folder(folder_name, parent_id=None):
 
 def upload_file(file_path, folder_id):
     name = os.path.basename(file_path)
+    # Check exists
+    query = f"name = '{name}' and '{folder_id}' in parents and trashed = false"
+    results = drive_service.files().list(q=query, fields="files(id)").execute()
+    if len(results.get('files', [])) > 0: return 
+        
     meta = {'name': name, 'parents': [folder_id]}
     media = MediaFileUpload(file_path, mimetype='application/json')
     drive_service.files().create(body=meta, media_body=media).execute()
 
 def upload_zip_and_get_link(zip_path, folder_id):
     name = os.path.basename(zip_path)
-    # Check if exists, delete old
+    # 🧹 DELETE OLD FULL BOOK (Clean Overwrite)
     query = f"name = '{name}' and '{folder_id}' in parents and trashed = false"
     results = drive_service.files().list(q=query, fields="files(id)").execute()
     for f in results.get('files', []):
@@ -144,8 +148,8 @@ def upload_zip_and_get_link(zip_path, folder_id):
         except: pass
 
     # Upload New
-    terminal.update_progress(70, "Uploading ZIP...")
-    log(f"📦 Uploading Zip: {name}...")
+    terminal.update_progress(70, "Uploading Full Book...")
+    log(f"📦 Uploading Final Zip: {name}...")
     meta = {'name': name, 'parents': [folder_id]}
     media = MediaFileUpload(zip_path, mimetype='application/zip')
     file = drive_service.files().create(body=meta, media_body=media, fields='id').execute()
@@ -162,93 +166,83 @@ def upload_zip_and_get_link(zip_path, folder_id):
 def main():
     terminal.start()
     
-    # Identify Folder Structure
-    try:
-        if not os.path.exists(INPUT_ROOT):
-            log("❌ Input Root missing!")
-            return
-            
-        folders = os.listdir(INPUT_ROOT)
-        if not folders:
-            log("❌ No Output Folders found.")
-            return
-            
-        exam_folder_name = folders[0] # e.g., "UPSI_History"
-        log(f"🎯 Target: {exam_folder_name}")
-        
-    except Exception as e:
-        log(f"❌ Folder Error: {e}")
+    if not os.path.exists(INPUT_ROOT):
+        log(f"❌ Input Root missing: {INPUT_ROOT}")
         return
+            
+    # Try to find a meaningful name
+    exam_folder_name = "AJX_Full_Book" 
+    folders = [f for f in os.listdir(INPUT_ROOT) if os.path.isdir(os.path.join(INPUT_ROOT, f))]
+    if folders:
+        exam_folder_name = folders[0].split('_')[0] + "_Combined"
+        
+    log(f"🎯 Syncing Target: {exam_folder_name}")
 
     # 1. DRIVE BACKUP (Raw Files)
     terminal.update_progress(20, "Backing up Raw Files...")
-    log("☁️ Cloud Backup Started...")
-    
-    try:
-        root_backup_id = get_or_create_folder(BACKUP_DRIVE_FOLDER)
-        exam_backup_id = get_or_create_folder(exam_folder_name, root_backup_id)
+    root_backup_id = get_or_create_folder(BACKUP_DRIVE_FOLDER)
+    date_folder = f"Backup_{int(time.time())}"
+    backup_id = get_or_create_folder(date_folder, root_backup_id)
 
-        # Count files for progress
-        total_files = sum([len(files) for r, d, files in os.walk(os.path.join(INPUT_ROOT, exam_folder_name))])
-        processed = 0
+    total_files = sum([len(files) for r, d, files in os.walk(INPUT_ROOT)])
+    processed = 0
 
-        for root, dirs, files in os.walk(os.path.join(INPUT_ROOT, exam_folder_name)):
-            for file in files:
-                if file.endswith(".json"):
-                    # Recreate hierarchy
-                    rel_path = os.path.relpath(root, os.path.join(INPUT_ROOT, exam_folder_name))
-                    current_drive_id = exam_backup_id
-                    
-                    if rel_path != ".":
-                        for part in rel_path.split(os.sep):
-                            current_drive_id = get_or_create_folder(part, current_drive_id)
-                    
-                    full_path = os.path.join(root, file)
-                    upload_file(full_path, current_drive_id)
-                    
-                    processed += 1
-                    if processed % 5 == 0:
-                        percent = 20 + int((processed / total_files) * 30)
-                        terminal.update_progress(percent, f"Saved: {file}")
+    for root, dirs, files in os.walk(INPUT_ROOT):
+        for file in files:
+            if file.endswith(".json"):
+                rel_path = os.path.relpath(root, INPUT_ROOT)
+                current_drive_id = backup_id
+                
+                if rel_path != ".":
+                    for part in rel_path.split(os.sep):
+                        current_drive_id = get_or_create_folder(part, current_drive_id)
+                
+                full_path = os.path.join(root, file)
+                upload_file(full_path, current_drive_id)
+                
+                processed += 1
+                if processed % 10 == 0:
+                    percent = 20 + int((processed / total_files) * 30)
+                    terminal.update_progress(percent, f"Saved: {file}")
 
-        log("✅ Raw Backup Complete!")
-    except Exception as e:
-        log(f"⚠️ Backup Error (Skipping): {e}")
+    log("✅ Raw Backup Complete!")
 
-    # 2. CREATE ZIP
-    terminal.update_progress(60, "Zipping Content...")
+    # 2. CREATE ZIP (FULL BOOK)
+    terminal.update_progress(60, "Zipping Full Book...")
     log("🤐 Creating Package...")
-    shutil.make_archive(exam_folder_name, 'zip', INPUT_ROOT)
-    zip_path = exam_folder_name + ".zip"
+    
+    zip_name = "AJX_Full_Book_Update"
+    shutil.make_archive(zip_name, 'zip', INPUT_ROOT)
+    zip_path = zip_name + ".zip"
 
-    # 3. UPLOAD ZIP
+    # 3. UPLOAD ZIP (OVERWRITE OLD)
     try:
         zip_file_id = upload_zip_and_get_link(zip_path, root_backup_id)
         direct_link = f"https://drive.google.com/uc?export=download&id={zip_file_id}"
-        log(f"✅ Zip Link Generated.")
+        log(f"✅ Full Book Link Generated.")
     except Exception as e:
         log(f"❌ Zip Upload Failed: {e}")
         return
 
-    # 4. NOTIFY FIREBASE
+    # 4. NOTIFY FIREBASE (FINAL UPDATE)
     terminal.update_progress(90, "Updating App...")
-    log("🔔 Sending Notification...")
+    log("🔔 Sending Final Notification...")
     
     try:
-        ref = db.reference(f"updates/{exam_folder_name}")
+        ref = db.reference(f"updates/latest_book")
         update_data = {
             "version": int(time.time()),
             "zip_url": direct_link,
-            "message": f"New content: {exam_folder_name}",
+            "message": f"Full Book Update Available",
             "timestamp": str(time.ctime())
         }
         ref.set(update_data)
-        log("✅ Firebase Updated!")
+        log("✅ Firebase Updated! App will overwrite old data.")
     except Exception as e:
         log(f"❌ Firebase Error: {e}")
 
     terminal.update_progress(100, "✅ SYNC COMPLETE")
-    log("🎉 All Systems Synced. App is live.")
+    log("🎉 All Systems Synced.")
 
 if __name__ == "__main__":
     main()
