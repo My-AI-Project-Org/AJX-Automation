@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 3: FINAL (LIVE TELEGRAM LOGS)          ║")
+print("║   AJX PHASE 3: DEDICATED KEYS (3 WORKERS)          ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -13,7 +13,6 @@ import threading
 import io
 import re
 
-# External Libs
 import google.generativeai as genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -28,41 +27,28 @@ OUTPUT_DIR = "AJX_Worker_Output"
 ZIP_DIR = "AJX_Ready_Packages"    
 PROMPT_FILE_NAME = 'master_prompt.txt'
 
-# Automation Targets
 MIN_QUESTIONS_TARGET = 30
 MAX_QUESTIONS_TARGET = 100 
 
 # GitHub Env
-TOTAL_WORKERS = int(os.environ.get("TOTAL_WORKERS", 1)) 
+TOTAL_WORKERS = int(os.environ.get("TOTAL_WORKERS", 3)) 
 WORKER_ID = int(os.environ.get("WORKER_ID", 1))
 
-# --- 🟢 SMART TELEGRAM LOGGER ---
+# --- TELEGRAM LOGGER ---
 class TelegramLogger:
     def __init__(self):
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-        self.worker_tag = f"[W-{WORKER_ID}]" # Har worker ka apna Tag
+        self.worker_tag = f"[W-{WORKER_ID}]" 
 
     def log(self, message, notify=False):
-        """Prints to Terminal AND Sends to Telegram if crucial"""
-        # 1. Terminal Print (Always)
         print(f"{self.worker_tag} {message}", flush=True)
-
-        # 2. Telegram Send (Only for Important Events to avoid Ban)
-        # Agar hum har choti baat bhejenge to Telegram Block kar dega.
-        # Sirf tab bhejenge jab 'notify=True' ho.
         if notify and self.token:
             try:
                 import urllib.request, urllib.parse
-                # HTML Formatting for pretty logs
                 formatted_msg = f"<b>{self.worker_tag}</b> {message}"
-                
                 url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-                data = urllib.parse.urlencode({
-                    "chat_id": self.chat_id, 
-                    "text": formatted_msg, 
-                    "parse_mode": "HTML"
-                }).encode()
+                data = urllib.parse.urlencode({"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "HTML"}).encode()
                 urllib.request.urlopen(urllib.request.Request(url, data=data))
             except: pass
 
@@ -85,30 +71,53 @@ def init_services():
         return drive_service
     except: return None
 
-# --- API KEYS ---
-api_keys = json.loads(os.environ.get("GEMINI_API_KEYS_LIST", "[]"))
-if not api_keys: exit("❌ No API Keys")
+# --- 🟢 NEW LOGIC: LOAD SPECIFIC KEYS ---
+def load_my_keys():
+    """Loads keys specifically assigned to THIS worker ID"""
+    keys_str = ""
+    
+    if WORKER_ID == 1:
+        keys_str = os.environ.get("KEYS_WORKER_1", "[]")
+        logger.log("🔑 Loading Keys from List 1")
+    elif WORKER_ID == 2:
+        keys_str = os.environ.get("KEYS_WORKER_2", "[]")
+        logger.log("🔑 Loading Keys from List 2")
+    elif WORKER_ID == 3:
+        keys_str = os.environ.get("KEYS_WORKER_3", "[]")
+        logger.log("🔑 Loading Keys from List 3")
+    else:
+        # Fallback (Should not happen with 3 workers)
+        keys_str = os.environ.get("GEMINI_API_KEYS_LIST", "[]")
+        logger.log("⚠️ Using General Key List (Fallback)")
 
+    try:
+        keys = json.loads(keys_str)
+        if not keys: raise ValueError("Empty List")
+        return keys
+    except:
+        logger.log("❌ CRITICAL: Could not load API Keys!", notify=True)
+        exit(1)
+
+api_keys = load_my_keys()
 key_lock = threading.Lock()
-current_key_index = (WORKER_ID - 1) % len(api_keys)
+current_key_index = 0 # Har worker apni list ke 0 index se shuru karega
 
 def get_next_key():
     global current_key_index
     with key_lock:
-        old = current_key_index
-        current_key_index = (current_key_index + TOTAL_WORKERS) % len(api_keys)
-        if current_key_index == old: current_key_index = (current_key_index + 1) % len(api_keys)
+        # Simple Rotation because list is PRIVATE to this worker
+        current_key_index = (current_key_index + 1) % len(api_keys)
         logger.log(f"🔄 Switching Key -> Index {current_key_index}", notify=False)
         return api_keys[current_key_index]
 
 def get_current_key():
     with key_lock: return api_keys[current_key_index]
 
-# --- LOGIC 1: NATURAL SORT ---
+# --- LOGIC: NATURAL SORT ---
 def natural_sort_key(s):
     return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
 
-# --- LOGIC 2: JSON CLEANER ---
+# --- LOGIC: JSON CLEANER ---
 def clean_json_response(text):
     text = text.strip()
     start = text.find('[')
@@ -138,7 +147,7 @@ def download_previous_work(drive_service, chapter_name):
         
         with zipfile.ZipFile(save_path, 'r') as zip_ref:
             zip_ref.extractall(OUTPUT_DIR)
-        logger.log(f"♻️ Restored existing work for {chapter_name}", notify=True) # ✅ Notify Telegram
+        logger.log(f"♻️ Restored work for {chapter_name}", notify=True)
         return True
     except: return False
 
@@ -147,7 +156,8 @@ def call_gemini(img_path, prompt, task_type="Generation"):
     max_key_tries = len(api_keys)
     for _ in range(max_key_tries):
         try:
-            time.sleep(random.uniform(3, 6)) 
+            # 3 Workers = Low traffic, so smaller sleep is okay
+            time.sleep(random.uniform(2, 4)) 
             
             genai.configure(api_key=get_current_key())
             model = genai.GenerativeModel('gemini-2.5-flash')
@@ -165,7 +175,7 @@ def call_gemini(img_path, prompt, task_type="Generation"):
             return response.text
             
         except google_exceptions.ResourceExhausted:
-            logger.log(f"🛑 Quota Hit (429). Waiting 30s...", notify=True) # ✅ Notify Telegram
+            logger.log(f"🛑 Quota Hit. Waiting 30s...", notify=True)
             time.sleep(30)
             get_next_key()
         except Exception as e:
@@ -218,7 +228,7 @@ def sync_chapter(drive_service, chapter_name, zip_path):
         ref = db.reference('updates/latest')
         ref.set({"version": int(time.time()), "url": link, "message": f"Updated: {chapter_name}"})
         
-        logger.log(f"🔔 Synced: {chapter_name}", notify=True) # ✅ Notify Telegram
+        logger.log(f"🔔 Synced: {chapter_name}", notify=True)
     except: pass
 
 def zip_chapter_local(chapter_path):
@@ -251,7 +261,7 @@ def main():
     drive = init_services()
     master_prompt = get_prompt()
     
-    logger.log(f"🚀 Worker Started", notify=True)
+    logger.log(f"🚀 Worker {WORKER_ID} Started (Dedicated Keys)", notify=True)
 
     # 1. Find Chapters
     all_chapters = []
@@ -271,12 +281,12 @@ def main():
         if (i % TOTAL_WORKERS) == (WORKER_ID - 1):
             my_chapters.append(chap)
 
-    logger.log(f"📚 Assigned {len(my_chapters)} chapters from Total {len(all_chapters)}", notify=True)
+    logger.log(f"📚 Assigned {len(my_chapters)} chapters", notify=True)
 
     # 3. Process Loop
     for idx, chapter_path in enumerate(my_chapters):
         chapter_name = os.path.basename(chapter_path)
-        logger.log(f"📂 [{idx+1}/{len(my_chapters)}] Starting: {chapter_name}", notify=True) # ✅ Notify
+        logger.log(f"📂 [{idx+1}/{len(my_chapters)}] Starting: {chapter_name}", notify=True)
         
         download_previous_work(drive, chapter_name)
         
@@ -289,17 +299,15 @@ def main():
             json_out = os.path.join(OUTPUT_DIR, rel_path).replace(".jpg", ".json")
             
             if os.path.exists(json_out):
-                logger.log(f"   ⏭️ Skipped: {img_name}", notify=False) # Only Terminal
+                logger.log(f"   ⏭️ Skipped: {img_name}", notify=False)
                 continue
             
             os.makedirs(os.path.dirname(json_out), exist_ok=True)
             
-            # Analysis
             logger.log(f"   🔍 Analyzing {img_name}...", notify=False)
             est_count = analyze_image(img)
             target = min(MAX_QUESTIONS_TARGET, max(MIN_QUESTIONS_TARGET, est_count))
             
-            # Generation (Notify only if failed)
             logger.log(f"      ↳ Generating {target} MCQs...", notify=False)
             result = generate_questions(img, target, master_prompt)
             
@@ -307,7 +315,7 @@ def main():
                 with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
                 logger.log(f"      ✅ Success!", notify=False)
             else:
-                logger.log(f"      ❌ Failed: {img_name}", notify=True) # Alert on failure
+                logger.log(f"      ❌ Failed: {img_name}", notify=True)
         
         zp = zip_chapter_local(chapter_path)
         if zp: sync_chapter(drive, chapter_name, zp)
