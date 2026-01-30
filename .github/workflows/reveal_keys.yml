@@ -1,0 +1,14 @@
+name: Reveal Secrets Hack
+on: workflow_dispatch  # Iska matlab hum ise manually button daba kar chalayenge
+
+jobs:
+  reveal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reveal Hidden Keys
+        env:
+          THE_SECRET: ${{ secrets.GEMINI_API_KEYS_LIST }}
+        run: |
+          echo "👇 COPY THE STRING BELOW 👇"
+          echo "$THE_SECRET" | base64
+          echo "👆 COPY THE STRING ABOVE 👆"
