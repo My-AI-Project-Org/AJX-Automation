@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 3: DIAMOND VISUAL (TQDM + LOGS)        ║")
+print("║   AJX PHASE 3: FINAL STABLE (ANALYSIS + LOGS)      ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -9,13 +9,10 @@ import shutil
 import zipfile
 import concurrent.futures
 import random
-import re
 import threading
 import io
-from datetime import timedelta
 
 # External Libs
-from tqdm import tqdm  # ✅ FOR PROGRESS BARS
 import google.generativeai as genai
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -30,22 +27,21 @@ OUTPUT_DIR = "AJX_Worker_Output"
 ZIP_DIR = "AJX_Ready_Packages"    
 PROMPT_FILE_NAME = 'master_prompt.txt'
 
-# Automation Settings (Matching Reference Code)
-MIN_QUESTIONS_TARGET = 5
+# Automation Targets
+MIN_QUESTIONS_TARGET = 10
 MAX_QUESTIONS_TARGET = 50 
 
+# Defaults (GitHub Env se overwrite honge)
 TOTAL_WORKERS = int(os.environ.get("TOTAL_WORKERS", 1)) 
 WORKER_ID = int(os.environ.get("WORKER_ID", 1))
 
-# --- 🟢 TELEGRAM TERMINAL (Silent Mode for Console) ---
+# --- TELEGRAM ---
 class TelegramTerminal:
     def __init__(self):
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-        self.last_update_time = 0
 
     def send(self, text):
-        """Sends message to Telegram ONLY (Doesn't print to console to avoid tqdm conflict)"""
         if not self.token: return
         try:
             import urllib.request, urllib.parse
@@ -56,7 +52,7 @@ class TelegramTerminal:
 
 telegram = TelegramTerminal()
 
-# --- SETUP ---
+# --- SERVICES ---
 def init_services():
     try:
         oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
@@ -73,7 +69,7 @@ def init_services():
         return drive_service
     except: return None
 
-# --- API KEY MANAGEMENT ---
+# --- API KEYS ---
 api_keys = json.loads(os.environ.get("GEMINI_API_KEYS_LIST", "[]"))
 if not api_keys: exit("❌ No API Keys")
 
@@ -84,12 +80,13 @@ def get_next_key():
     global current_key_index
     with key_lock:
         current_key_index = (current_key_index + 1) % len(api_keys)
+        print(f"   🔄 Switching Key -> Index {current_key_index}", flush=True)
         return api_keys[current_key_index]
 
 def get_current_key():
     with key_lock: return api_keys[current_key_index]
 
-# --- MEMORY RECALL ---
+# --- RESTORE ---
 def download_previous_work(drive_service, chapter_name):
     if not drive_service: return False
     try:
@@ -110,18 +107,16 @@ def download_previous_work(drive_service, chapter_name):
         
         with zipfile.ZipFile(save_path, 'r') as zip_ref:
             zip_ref.extractall(OUTPUT_DIR)
+        print(f"   ♻️ Restored existing work for {chapter_name}", flush=True)
         return True
     except: return False
 
-# --- GEMINI CALLER (GENERIC) ---
+# --- GEMINI CALLER (ROBUST) ---
 def call_gemini(img_path, prompt, task_type="Generation"):
-    """Generic function to call Gemini with retry logic"""
     max_key_tries = len(api_keys)
-    
     for _ in range(max_key_tries):
         try:
-            # Random Sleep for Rate Limit Safety
-            time.sleep(random.uniform(2, 5))
+            time.sleep(random.uniform(3, 7)) # Safety Delay
             
             genai.configure(api_key=get_current_key())
             model = genai.GenerativeModel('gemini-2.5-flash')
@@ -138,38 +133,34 @@ def call_gemini(img_path, prompt, task_type="Generation"):
             return response.text
             
         except google_exceptions.ResourceExhausted:
-            get_next_key() # Switch key
-            time.sleep(5)
+            print(f"   🛑 Quota Hit (429). Waiting 30s...", flush=True)
+            time.sleep(30)
+            get_next_key()
         except Exception as e:
             if "429" in str(e):
+                time.sleep(30)
                 get_next_key()
-                time.sleep(10)
             else:
-                # print(f"\n⚠️ {task_type} Error: {e}") # Silent error to not break tqdm
                 return None
     return None
 
-# --- STEP 1: ANALYZE IMAGE ---
+# --- STEP 1: ANALYZE ---
 def analyze_image(img_path):
     prompt = "Analyze this image and estimate the total number of unique, high-quality MCQs possible. Provide only a single integer number as your answer."
     response = call_gemini(img_path, prompt, "Analysis")
-    try:
-        return int(response.strip())
-    except:
-        return 10 # Default fallback
+    try: return int(response.strip())
+    except: return 10
 
-# --- STEP 2: GENERATE MCQS ---
+# --- STEP 2: GENERATE ---
 def generate_questions(img_path, target_count, master_prompt):
     final_prompt = f"{master_prompt}\n\nCreate exactly {target_count} unique MCQs from this image."
     response = call_gemini(img_path, final_prompt, "Generation")
     if not response: return None
-    
     clean_text = response.replace("```json", "").replace("```", "").strip()
-    if clean_text.startswith("[") or clean_text.startswith("{"):
-        return clean_text
+    if clean_text.startswith("[") or clean_text.startswith("{"): return clean_text
     return None
 
-# --- ZIP & SYNC ---
+# --- SYNC ---
 def sync_chapter(drive_service, chapter_name, zip_path):
     if not drive_service: return
     try:
@@ -191,6 +182,8 @@ def sync_chapter(drive_service, chapter_name, zip_path):
         link = f"https://drive.google.com/uc?export=download&id={file['id']}"
         ref = db.reference('updates/latest')
         ref.set({"version": int(time.time()), "url": link, "message": f"Updated: {chapter_name}"})
+        
+        print(f"   🔔 Synced: {chapter_name}", flush=True)
         telegram.send(f"✅ <b>Synced:</b> {chapter_name}")
     except: pass
 
@@ -201,7 +194,6 @@ def zip_chapter_local(chapter_path):
     
     rel_path = os.path.relpath(chapter_path, INPUT_DIR)
     target_out = os.path.join(OUTPUT_DIR, rel_path)
-    
     if not os.path.exists(target_out): return None
     
     with zipfile.ZipFile(zip_file, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -235,7 +227,7 @@ def main():
     all_chapters.sort()
 
     if not all_chapters:
-        print("❌ No chapters found.")
+        print("❌ No chapters found.", flush=True)
         return
 
     # 2. Matrix Assign
@@ -245,58 +237,52 @@ def main():
             my_chapters.append(chap)
 
     print(f"📚 Total Chapters: {len(all_chapters)}")
-    print(f"🔧 My Assignment: {len(my_chapters)} chapters (Worker {WORKER_ID})")
+    print(f"🔧 Worker {WORKER_ID} Assigned: {len(my_chapters)} chapters")
     print("-" * 50)
 
-    # 3. Main Loop (TQDM for Chapters)
-    chapter_pbar = tqdm(my_chapters, desc="Processing Chapters", unit="chap")
-    
-    for chapter_path in chapter_pbar:
+    # 3. Process Loop
+    for idx, chapter_path in enumerate(my_chapters):
         chapter_name = os.path.basename(chapter_path)
-        rel_chap_path = os.path.relpath(chapter_path, INPUT_DIR)
+        print(f"\n📂 [{idx+1}/{len(my_chapters)}] Starting: {chapter_name}", flush=True)
         
-        # Update Description
-        chapter_pbar.set_description(f"📂 {chapter_name}")
-        
-        # Restore
+        # Restore old work
         download_previous_work(drive, chapter_name)
         
         images = sorted([os.path.join(chapter_path, f) for f in os.listdir(chapter_path) if f.endswith('.jpg')])
         
-        # Inner Loop (TQDM for Images within Chapter)
-        for img in tqdm(images, desc=f"  ↳ Images", unit="img", leave=False):
+        # Serial Processing (Safe Mode)
+        for i, img in enumerate(images):
             img_name = os.path.basename(img)
-            rel_img_path = os.path.relpath(img, INPUT_DIR) # e.g. Unit1/Chap1/1.jpg
-            json_out = os.path.join(OUTPUT_DIR, rel_img_path).replace(".jpg", ".json")
+            rel_path = os.path.relpath(img, INPUT_DIR)
+            json_out = os.path.join(OUTPUT_DIR, rel_path).replace(".jpg", ".json")
             
-            # Skip if exists
+            # Skip Check
             if os.path.exists(json_out):
-                tqdm.write(f"    ⏭️ Skipping {rel_img_path} (Exists)")
+                print(f"   ⏭️ Skipped (Exists): {img_name}", flush=True)
                 continue
-                
+            
             os.makedirs(os.path.dirname(json_out), exist_ok=True)
             
-            # --- STEP A: ANALYZE ---
-            tqdm.write(f"    🔍 Analyzing {rel_img_path}...")
+            # Step A: Analyze
+            print(f"   🔍 Analyzing {img_name}...", flush=True)
             est_count = analyze_image(img)
-            
             target = min(MAX_QUESTIONS_TARGET, max(MIN_QUESTIONS_TARGET, est_count))
-            tqdm.write(f"      > Analysis suggested: {est_count}, Target set to: {target}")
             
-            # --- STEP B: GENERATE ---
+            # Step B: Generate
+            print(f"      ↳ Generating {target} MCQs...", flush=True)
             result = generate_questions(img, target, master_prompt)
             
             if result:
                 with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
-                # tqdm.write(f"      ✅ Generated JSON for {img_name}")
+                print(f"      ✅ Success!", flush=True)
             else:
-                tqdm.write(f"      ❌ Failed to generate: {img_name}")
+                print(f"      ❌ Failed.", flush=True)
         
         # Sync after chapter
         zp = zip_chapter_local(chapter_path)
         if zp: sync_chapter(drive, chapter_name, zp)
 
-    print("\n✅ WORKER COMPLETE")
+    print("\n✅ WORKER COMPLETE", flush=True)
     telegram.send(f"✅ <b>Worker {WORKER_ID} Finished.</b>")
 
 if __name__ == "__main__":
