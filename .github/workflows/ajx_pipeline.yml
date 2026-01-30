@@ -93,12 +93,13 @@ jobs:
   # PHASE 3: FACTORY (10 Workers)
   # ------------------------------------------------------------------
   phase3:
-    needs: phase2
+    needs: phase1  # 👈 Phase 1 ke baad chalega (Images wahin se aayengi)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        worker_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        worker_id: [1, 2, 3] # 👈 Updated: Sirf 3 Workers (Dedicated Keys ke liye)
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
@@ -108,12 +109,11 @@ jobs:
         with:
           python-version: '3.9'
           
-      # 👇 Firebase Admin add kiya hai
       - name: Install Dependencies
-        run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib
+        # 👇 tqdm aur baki libs add kiye hain
+        run: pip install google-generativeai Pillow rich firebase-admin google-api-python-client google-auth-oauthlib tqdm
 
-      # 👇 YE STEP MISSING THA: Images wapas download karna
-      - name: Download Images
+      - name: Download Images (From Phase 1)
         uses: actions/download-artifact@v4
         with:
           name: phase1-images
@@ -121,22 +121,30 @@ jobs:
 
       - name: Run Worker ${{ matrix.worker_id }}
         env:
+          # 👇 MATRIX SETUP
           WORKER_ID: ${{ matrix.worker_id }}
-          TOTAL_WORKERS: 10
-          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+          TOTAL_WORKERS: 3  # 👈 Updated to 3
+          
+          # 👇 DEDICATED KEYS MAPPING (Jo Python script dhundegi)
+          KEYS_WORKER_1: ${{ secrets.KEYS_WORKER_1 }}
+          KEYS_WORKER_2: ${{ secrets.KEYS_WORKER_2 }}
+          KEYS_WORKER_3: ${{ secrets.KEYS_WORKER_3 }}
+          
+          # 👇 STANDARD SECRETS
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_KEY }}
-          FIREBASE_DB_URL: "https://ajx-mcq-app-f5ba1-default-rtdb.firebaseio.com/"
-        run: python phase3_worker.py 10 ${{ matrix.worker_id }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_KEY }} # ⚠️ Check name in Secrets
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+        
+        # 👇 Command Updated: Arguments ki zarurat nahi, Env se uthayega
+        run: python phase3_processor.py 
 
       - name: Upload Worker Output
         uses: actions/upload-artifact@v4
         with:
           name: out-${{ matrix.worker_id }}
           path: AJX_Worker_Output/
-
   # ------------------------------------------------------------------
   # PHASE 4: SYNC (Firebase)
   # ------------------------------------------------------------------
