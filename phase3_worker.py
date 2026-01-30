@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 3: FINAL STABLE (ANALYSIS + LOGS)      ║")
+print("║   AJX PHASE 3: FINAL (LIVE TELEGRAM LOGS)          ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -11,6 +11,7 @@ import concurrent.futures
 import random
 import threading
 import io
+import re
 
 # External Libs
 import google.generativeai as genai
@@ -28,29 +29,44 @@ ZIP_DIR = "AJX_Ready_Packages"
 PROMPT_FILE_NAME = 'master_prompt.txt'
 
 # Automation Targets
-MIN_QUESTIONS_TARGET = 10
-MAX_QUESTIONS_TARGET = 50 
+MIN_QUESTIONS_TARGET = 30
+MAX_QUESTIONS_TARGET = 100 
 
-# Defaults (GitHub Env se overwrite honge)
+# GitHub Env
 TOTAL_WORKERS = int(os.environ.get("TOTAL_WORKERS", 1)) 
 WORKER_ID = int(os.environ.get("WORKER_ID", 1))
 
-# --- TELEGRAM ---
-class TelegramTerminal:
+# --- 🟢 SMART TELEGRAM LOGGER ---
+class TelegramLogger:
     def __init__(self):
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+        self.worker_tag = f"[W-{WORKER_ID}]" # Har worker ka apna Tag
 
-    def send(self, text):
-        if not self.token: return
-        try:
-            import urllib.request, urllib.parse
-            url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-            data = urllib.parse.urlencode({"chat_id": self.chat_id, "text": text, "parse_mode": "HTML"}).encode()
-            urllib.request.urlopen(urllib.request.Request(url, data=data))
-        except: pass
+    def log(self, message, notify=False):
+        """Prints to Terminal AND Sends to Telegram if crucial"""
+        # 1. Terminal Print (Always)
+        print(f"{self.worker_tag} {message}", flush=True)
 
-telegram = TelegramTerminal()
+        # 2. Telegram Send (Only for Important Events to avoid Ban)
+        # Agar hum har choti baat bhejenge to Telegram Block kar dega.
+        # Sirf tab bhejenge jab 'notify=True' ho.
+        if notify and self.token:
+            try:
+                import urllib.request, urllib.parse
+                # HTML Formatting for pretty logs
+                formatted_msg = f"<b>{self.worker_tag}</b> {message}"
+                
+                url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+                data = urllib.parse.urlencode({
+                    "chat_id": self.chat_id, 
+                    "text": formatted_msg, 
+                    "parse_mode": "HTML"
+                }).encode()
+                urllib.request.urlopen(urllib.request.Request(url, data=data))
+            except: pass
+
+logger = TelegramLogger()
 
 # --- SERVICES ---
 def init_services():
@@ -79,12 +95,27 @@ current_key_index = (WORKER_ID - 1) % len(api_keys)
 def get_next_key():
     global current_key_index
     with key_lock:
-        current_key_index = (current_key_index + 1) % len(api_keys)
-        print(f"   🔄 Switching Key -> Index {current_key_index}", flush=True)
+        old = current_key_index
+        current_key_index = (current_key_index + TOTAL_WORKERS) % len(api_keys)
+        if current_key_index == old: current_key_index = (current_key_index + 1) % len(api_keys)
+        logger.log(f"🔄 Switching Key -> Index {current_key_index}", notify=False)
         return api_keys[current_key_index]
 
 def get_current_key():
     with key_lock: return api_keys[current_key_index]
+
+# --- LOGIC 1: NATURAL SORT ---
+def natural_sort_key(s):
+    return [int(text) if text.isdigit() else text.lower() for text in re.split('([0-9]+)', s)]
+
+# --- LOGIC 2: JSON CLEANER ---
+def clean_json_response(text):
+    text = text.strip()
+    start = text.find('[')
+    end = text.rfind(']')
+    if start != -1 and end != -1:
+        return text[start : end + 1]
+    return text 
 
 # --- RESTORE ---
 def download_previous_work(drive_service, chapter_name):
@@ -107,16 +138,16 @@ def download_previous_work(drive_service, chapter_name):
         
         with zipfile.ZipFile(save_path, 'r') as zip_ref:
             zip_ref.extractall(OUTPUT_DIR)
-        print(f"   ♻️ Restored existing work for {chapter_name}", flush=True)
+        logger.log(f"♻️ Restored existing work for {chapter_name}", notify=True) # ✅ Notify Telegram
         return True
     except: return False
 
-# --- GEMINI CALLER (ROBUST) ---
+# --- GEMINI CALLER ---
 def call_gemini(img_path, prompt, task_type="Generation"):
     max_key_tries = len(api_keys)
     for _ in range(max_key_tries):
         try:
-            time.sleep(random.uniform(3, 7)) # Safety Delay
+            time.sleep(random.uniform(3, 6)) 
             
             genai.configure(api_key=get_current_key())
             model = genai.GenerativeModel('gemini-2.5-flash')
@@ -129,11 +160,12 @@ def call_gemini(img_path, prompt, task_type="Generation"):
                 wait += 1
                 if wait > 20: raise TimeoutError("Processing Timeout")
 
-            response = model.generate_content([prompt, img_file])
+            gen_config = {"temperature": 0.4, "top_p": 1, "top_k": 1, "max_output_tokens": 16384}
+            response = model.generate_content([prompt, img_file], generation_config=gen_config)
             return response.text
             
         except google_exceptions.ResourceExhausted:
-            print(f"   🛑 Quota Hit (429). Waiting 30s...", flush=True)
+            logger.log(f"🛑 Quota Hit (429). Waiting 30s...", notify=True) # ✅ Notify Telegram
             time.sleep(30)
             get_next_key()
         except Exception as e:
@@ -144,20 +176,26 @@ def call_gemini(img_path, prompt, task_type="Generation"):
                 return None
     return None
 
-# --- STEP 1: ANALYZE ---
+# --- ANALYSIS & GEN ---
 def analyze_image(img_path):
     prompt = "Analyze this image and estimate the total number of unique, high-quality MCQs possible. Provide only a single integer number as your answer."
     response = call_gemini(img_path, prompt, "Analysis")
     try: return int(response.strip())
-    except: return 10
+    except: return 30 
 
-# --- STEP 2: GENERATE ---
 def generate_questions(img_path, target_count, master_prompt):
-    final_prompt = f"{master_prompt}\n\nCreate exactly {target_count} unique MCQs from this image."
+    final_prompt = f"""
+    {master_prompt}
+    **CRITICAL INSTRUCTION:**
+    You MUST create exactly {target_count} unique MCQs from this image.
+    Do not stop early. Ensure strict JSON array format.
+    """
     response = call_gemini(img_path, final_prompt, "Generation")
     if not response: return None
-    clean_text = response.replace("```json", "").replace("```", "").strip()
-    if clean_text.startswith("[") or clean_text.startswith("{"): return clean_text
+    
+    clean_text = clean_json_response(response)
+    if clean_text.startswith("[") and clean_text.endswith("]"): 
+        return clean_text
     return None
 
 # --- SYNC ---
@@ -165,26 +203,22 @@ def sync_chapter(drive_service, chapter_name, zip_path):
     if not drive_service: return
     try:
         filename = os.path.basename(zip_path)
-        # Delete Old
         q = f"name = '{filename}' and trashed = false"
         res = drive_service.files().list(q=q, fields="files(id)").execute()
         for f in res.get('files', []):
             try: drive_service.files().delete(fileId=f['id']).execute()
             except: pass
             
-        # Upload New
         meta = {'name': filename}
         media = MediaFileUpload(zip_path, mimetype='application/zip')
         file = drive_service.files().create(body=meta, media_body=media, fields='id').execute()
         
-        # Notify Firebase
         drive_service.permissions().create(fileId=file['id'], body={'type': 'anyone', 'role': 'reader'}).execute()
         link = f"https://drive.google.com/uc?export=download&id={file['id']}"
         ref = db.reference('updates/latest')
         ref.set({"version": int(time.time()), "url": link, "message": f"Updated: {chapter_name}"})
         
-        print(f"   🔔 Synced: {chapter_name}", flush=True)
-        telegram.send(f"✅ <b>Synced:</b> {chapter_name}")
+        logger.log(f"🔔 Synced: {chapter_name}", notify=True) # ✅ Notify Telegram
     except: pass
 
 def zip_chapter_local(chapter_path):
@@ -217,17 +251,18 @@ def main():
     drive = init_services()
     master_prompt = get_prompt()
     
-    telegram.send(f"🏭 <b>Worker {WORKER_ID} Started</b>")
+    logger.log(f"🚀 Worker Started", notify=True)
 
     # 1. Find Chapters
     all_chapters = []
     for root, dirs, files in os.walk(INPUT_DIR):
         if any(f.endswith('.jpg') for f in files):
             all_chapters.append(root)
-    all_chapters.sort()
+    
+    all_chapters.sort(key=lambda x: natural_sort_key(os.path.basename(x)))
 
     if not all_chapters:
-        print("❌ No chapters found.", flush=True)
+        logger.log("❌ No chapters found.", notify=True)
         return
 
     # 2. Matrix Assign
@@ -236,54 +271,48 @@ def main():
         if (i % TOTAL_WORKERS) == (WORKER_ID - 1):
             my_chapters.append(chap)
 
-    print(f"📚 Total Chapters: {len(all_chapters)}")
-    print(f"🔧 Worker {WORKER_ID} Assigned: {len(my_chapters)} chapters")
-    print("-" * 50)
+    logger.log(f"📚 Assigned {len(my_chapters)} chapters from Total {len(all_chapters)}", notify=True)
 
     # 3. Process Loop
     for idx, chapter_path in enumerate(my_chapters):
         chapter_name = os.path.basename(chapter_path)
-        print(f"\n📂 [{idx+1}/{len(my_chapters)}] Starting: {chapter_name}", flush=True)
+        logger.log(f"📂 [{idx+1}/{len(my_chapters)}] Starting: {chapter_name}", notify=True) # ✅ Notify
         
-        # Restore old work
         download_previous_work(drive, chapter_name)
         
-        images = sorted([os.path.join(chapter_path, f) for f in os.listdir(chapter_path) if f.endswith('.jpg')])
+        images = [os.path.join(chapter_path, f) for f in os.listdir(chapter_path) if f.endswith('.jpg')]
+        images.sort(key=lambda x: natural_sort_key(os.path.basename(x)))
         
-        # Serial Processing (Safe Mode)
         for i, img in enumerate(images):
             img_name = os.path.basename(img)
             rel_path = os.path.relpath(img, INPUT_DIR)
             json_out = os.path.join(OUTPUT_DIR, rel_path).replace(".jpg", ".json")
             
-            # Skip Check
             if os.path.exists(json_out):
-                print(f"   ⏭️ Skipped (Exists): {img_name}", flush=True)
+                logger.log(f"   ⏭️ Skipped: {img_name}", notify=False) # Only Terminal
                 continue
             
             os.makedirs(os.path.dirname(json_out), exist_ok=True)
             
-            # Step A: Analyze
-            print(f"   🔍 Analyzing {img_name}...", flush=True)
+            # Analysis
+            logger.log(f"   🔍 Analyzing {img_name}...", notify=False)
             est_count = analyze_image(img)
             target = min(MAX_QUESTIONS_TARGET, max(MIN_QUESTIONS_TARGET, est_count))
             
-            # Step B: Generate
-            print(f"      ↳ Generating {target} MCQs...", flush=True)
+            # Generation (Notify only if failed)
+            logger.log(f"      ↳ Generating {target} MCQs...", notify=False)
             result = generate_questions(img, target, master_prompt)
             
             if result:
                 with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
-                print(f"      ✅ Success!", flush=True)
+                logger.log(f"      ✅ Success!", notify=False)
             else:
-                print(f"      ❌ Failed.", flush=True)
+                logger.log(f"      ❌ Failed: {img_name}", notify=True) # Alert on failure
         
-        # Sync after chapter
         zp = zip_chapter_local(chapter_path)
         if zp: sync_chapter(drive, chapter_name, zp)
 
-    print("\n✅ WORKER COMPLETE", flush=True)
-    telegram.send(f"✅ <b>Worker {WORKER_ID} Finished.</b>")
+    logger.log("✅ WORKER COMPLETE", notify=True)
 
 if __name__ == "__main__":
     main()
