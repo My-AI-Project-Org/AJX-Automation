@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 3: VERIFICATION MODE (NO MISSING FILES)║")
+print("║   AJX PHASE 3: FULL TELEGRAM VERBOSE LOGS          ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -26,6 +26,7 @@ INPUT_DIR = "AJX_Phase1_Output"
 OUTPUT_DIR = "AJX_Worker_Output"  
 ZIP_DIR = "AJX_Ready_Packages"    
 PROMPT_FILE_NAME = 'master_prompt.txt'
+DRIVE_FOLDER_NAME = "AJX_Automated_Output" 
 
 # Batching Settings
 MIN_QUESTIONS_TARGET = 30
@@ -37,7 +38,7 @@ MAX_RETRIES_PER_IMG = 3
 TOTAL_WORKERS = int(os.environ.get("TOTAL_WORKERS", 3)) 
 WORKER_ID = int(os.environ.get("WORKER_ID", 1))
 
-# --- TELEGRAM LOGGER ---
+# --- TELEGRAM LOGGER (UPDATED FOR VERBOSE MODE) ---
 class TelegramLogger:
     def __init__(self):
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -45,15 +46,24 @@ class TelegramLogger:
         self.worker_tag = f"[W-{WORKER_ID}]" 
 
     def log(self, message, notify=False):
+        # Terminal Print
         print(f"{self.worker_tag} {message}", flush=True)
+
+        # Telegram Send (If notify is True)
         if notify and self.token:
             try:
                 import urllib.request, urllib.parse
-                formatted_msg = f"<b>{self.worker_tag}</b> {message}"
+                # No HTML needed for raw logs, keeps it clean
+                full_msg = f"{self.worker_tag} {message}"
+                
                 url = f"https://api.telegram.org/bot{self.token}/sendMessage"
-                data = urllib.parse.urlencode({"chat_id": self.chat_id, "text": formatted_msg, "parse_mode": "HTML"}).encode()
+                data = urllib.parse.urlencode({"chat_id": self.chat_id, "text": full_msg}).encode()
                 urllib.request.urlopen(urllib.request.Request(url, data=data))
-            except: pass
+                
+                # 🛑 ANTI-BAN THROTTLE: Wait 0.3s after sending to avoid 429 Error
+                time.sleep(0.3)
+            except Exception as e:
+                print(f"Telegram Error: {e}")
 
 logger = TelegramLogger()
 
@@ -61,10 +71,17 @@ logger = TelegramLogger()
 def init_services():
     try:
         oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
-        if not oauth_json: return None
+        if not oauth_json: 
+            logger.log("❌ Error: GDRIVE_OAUTH_JSON secret is missing!", notify=True)
+            return None
         token_info = json.loads(oauth_json)
         creds = Credentials.from_authorized_user_info(token_info, ['https://www.googleapis.com/auth/drive'])
         drive_service = build('drive', 'v3', credentials=creds)
+
+        # Connection Test
+        try:
+            drive_service.files().list(pageSize=1).execute()
+        except: return None
 
         if not firebase_admin._apps:
             fb_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
@@ -98,7 +115,7 @@ def get_next_key():
     global current_key_index
     with key_lock:
         current_key_index = (current_key_index + 1) % len(api_keys)
-        logger.log(f"🔄 Switching Key -> Index {current_key_index}", notify=False)
+        logger.log(f"🔄 Switching Key -> Index {current_key_index}", notify=True) # ✅ Notify Telegram
         return api_keys[current_key_index]
 
 def get_current_key():
@@ -116,11 +133,23 @@ def clean_json_response(text):
         return text[start : end + 1]
     return text 
 
+# --- DRIVE FOLDER ---
+def get_or_create_folder(drive_service, folder_name):
+    query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
+    results = drive_service.files().list(q=query, fields="files(id)").execute()
+    files = results.get('files', [])
+    if files: return files[0]['id']
+    else:
+        file_metadata = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
+        folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+        return folder.get('id')
+
 # --- RESTORE ---
 def download_previous_work(drive_service, chapter_name):
     if not drive_service: return False
     try:
-        query = f"name = '{chapter_name}.zip' and trashed = false"
+        folder_id = get_or_create_folder(drive_service, DRIVE_FOLDER_NAME)
+        query = f"name = '{chapter_name}.zip' and '{folder_id}' in parents and trashed = false"
         results = drive_service.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
         if not files: return False
@@ -146,8 +175,8 @@ def call_gemini(img_path, prompt, task_type="Generation"):
     max_key_tries = len(api_keys)
     for _ in range(max_key_tries):
         try:
+            # 3 Workers = Safe to keep low sleep
             time.sleep(random.uniform(2, 4)) 
-            
             genai.configure(api_key=get_current_key())
             model = genai.GenerativeModel('gemini-2.5-flash')
             img_file = genai.upload_file(img_path)
@@ -164,7 +193,7 @@ def call_gemini(img_path, prompt, task_type="Generation"):
             return response.text
             
         except google_exceptions.ResourceExhausted:
-            logger.log(f"🛑 Quota Hit. Waiting 30s...", notify=True)
+            logger.log(f"🛑 Quota Hit. Waiting 30s...", notify=True) # ✅ Notify Telegram
             time.sleep(30)
             get_next_key()
         except Exception as e:
@@ -198,7 +227,8 @@ def generate_questions_multipass(img_path, target_count, master_prompt):
         - Return strictly a JSON array.
         """
         
-        logger.log(f"      ↳ Batch: requesting {batch_size} Qs (Total so far: {len(all_questions)})", notify=False)
+        # ✅ Notify Telegram: Batch Request
+        logger.log(f"      ↳ Batch: requesting {batch_size} Qs (Total so far: {len(all_questions)})", notify=True)
         
         batch_success = False
         for attempt in range(2): 
@@ -217,7 +247,7 @@ def generate_questions_multipass(img_path, target_count, master_prompt):
                 time.sleep(2)
         
         if not batch_success:
-            break # Stop passes if one fails hard
+            break 
             
     return json.dumps(all_questions, indent=2) if all_questions else None
 
@@ -225,14 +255,16 @@ def generate_questions_multipass(img_path, target_count, master_prompt):
 def sync_chapter(drive_service, chapter_name, zip_path):
     if not drive_service: return
     try:
+        folder_id = get_or_create_folder(drive_service, DRIVE_FOLDER_NAME)
         filename = os.path.basename(zip_path)
-        q = f"name = '{filename}' and trashed = false"
+        
+        q = f"name = '{filename}' and '{folder_id}' in parents and trashed = false"
         res = drive_service.files().list(q=q, fields="files(id)").execute()
         for f in res.get('files', []):
             try: drive_service.files().delete(fileId=f['id']).execute()
             except: pass
             
-        meta = {'name': filename}
+        meta = {'name': filename, 'parents': [folder_id]}
         media = MediaFileUpload(zip_path, mimetype='application/zip')
         file = drive_service.files().create(body=meta, media_body=media, fields='id').execute()
         
@@ -242,7 +274,8 @@ def sync_chapter(drive_service, chapter_name, zip_path):
         ref.set({"version": int(time.time()), "url": link, "message": f"Updated: {chapter_name}"})
         
         logger.log(f"🔔 Synced: {chapter_name}", notify=True)
-    except: pass
+    except Exception as e:
+        logger.log(f"❌ Sync Failed: {e}", notify=True)
 
 def zip_chapter_local(chapter_path):
     chapter_name = os.path.basename(chapter_path)
@@ -271,10 +304,10 @@ def get_prompt():
 # --- MAIN ---
 def main():
     os.makedirs(ZIP_DIR, exist_ok=True)
-    drive = init_services()
+    drive = init_services() 
     master_prompt = get_prompt()
     
-    logger.log(f"🚀 Worker {WORKER_ID} Started (Self-Verify Mode)", notify=True)
+    logger.log(f"🚀 Worker {WORKER_ID} Started", notify=True)
 
     all_chapters = []
     for root, dirs, files in os.walk(INPUT_DIR):
@@ -302,7 +335,7 @@ def main():
         images = [os.path.join(chapter_path, f) for f in os.listdir(chapter_path) if f.endswith('.jpg')]
         images.sort(key=lambda x: natural_sort_key(os.path.basename(x)))
         
-        # --- PASS 1: STANDARD PROCESSING ---
+        # --- PASS 1 ---
         for i, img in enumerate(images):
             img_name = os.path.basename(img)
             rel_path = os.path.relpath(img, INPUT_DIR)
@@ -313,21 +346,24 @@ def main():
                 continue
             
             os.makedirs(os.path.dirname(json_out), exist_ok=True)
-            logger.log(f"   🔍 Analyzing {img_name}...", notify=False)
+            
+            # ✅ Notify Telegram: Analysis Start
+            logger.log(f"   🔍 Analyzing {img_name}...", notify=True)
             est_count = analyze_image(img)
             target = min(MAX_QUESTIONS_TARGET, max(MIN_QUESTIONS_TARGET, est_count))
             
-            # Retry Loop
             for attempt in range(MAX_RETRIES_PER_IMG):
-                logger.log(f"      ↳ Attempt {attempt+1}/{MAX_RETRIES_PER_IMG}", notify=False)
+                # ✅ Notify Telegram: Attempt Number
+                logger.log(f"      ↳ Attempt {attempt+1}/{MAX_RETRIES_PER_IMG}", notify=True)
+                
                 result = generate_questions_multipass(img, target, master_prompt)
                 if result:
                     with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
-                    logger.log(f"      ✅ Success!", notify=False)
+                    # ✅ Notify Telegram: Success
+                    logger.log(f"      ✅ Success!", notify=True)
                     break
         
-        # --- 🕵️‍♂️ PASS 2: FINAL AUDIT (VERIFICATION) ---
-        # "Zip karne se pehle check karo ki sab kuch hai ya nahi"
+        # --- PASS 2: AUDIT ---
         missing_images = []
         for img in images:
             rel_path = os.path.relpath(img, INPUT_DIR)
@@ -336,24 +372,19 @@ def main():
                 missing_images.append(img)
         
         if missing_images:
-            logger.log(f"⚠️ Chapter Incomplete! {len(missing_images)} images failed. Retrying...", notify=True)
-            
+            logger.log(f"⚠️ Chapter Incomplete! {len(missing_images)} failed. Retrying...", notify=True)
             for img in missing_images:
                 img_name = os.path.basename(img)
                 rel_path = os.path.relpath(img, INPUT_DIR)
                 json_out = os.path.join(OUTPUT_DIR, rel_path).replace(".jpg", ".json")
                 
-                logger.log(f"   🔄 Final Retry for: {img_name}", notify=False)
-                # Force attempt with default safety target
+                logger.log(f"   🔄 Retry: {img_name}", notify=True)
                 result = generate_questions_multipass(img, 30, master_prompt) 
                 if result:
                     with open(json_out, 'w', encoding='utf-8') as f: f.write(result)
-                    logger.log(f"      ✅ Recovered: {img_name}", notify=False)
-                else:
-                    logger.log(f"      ❌ Give Up: {img_name} is broken/unreadable", notify=False)
+                    logger.log(f"      ✅ Recovered: {img_name}", notify=True)
 
         # --- SYNC ---
-        # Ab jo bhi haal hai, Zip karke bhej do
         zp = zip_chapter_local(chapter_path)
         if zp: sync_chapter(drive, chapter_name, zp)
 
