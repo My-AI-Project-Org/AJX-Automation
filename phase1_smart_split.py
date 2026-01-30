@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 1: SMART SYNC (SKIP EXISTING DRIVE)    ║")
+print("║   AJX PHASE 1: TITANIUM (FIXED IMPORTS & ORDER)    ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -20,7 +20,8 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload, MediaFileUpload
 import google.generativeai as genai
 from pdf2image import convert_from_path, pdfinfo_from_path
-from PIL import Image
+# 👇 FIXED: ImageDraw added here
+from PIL import Image, ImageDraw
 
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
@@ -41,7 +42,7 @@ class TelegramTerminal:
 
     def start(self):
         if not self.token: return
-        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (SMART)</b>\nInitializing...")
+        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (TITANIUM)</b>\nInitializing...")
 
     def log_stream(self, msg):
         clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
@@ -60,7 +61,7 @@ class TelegramTerminal:
         bar_len = 10
         filled = int(bar_len * self.current_progress / 100)
         bar = "█" * filled + "░" * (bar_len - filled)
-        text = (f"<b>💻 AJX PHASE 1 (SMART)</b>\n<code>{logs_text}</code>\n"
+        text = (f"<b>💻 AJX PHASE 1 (TITANIUM)</b>\n<code>{logs_text}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
                 f"<code>[{bar}] {self.current_progress}%</code>")
         self._edit_msg(text)
@@ -447,7 +448,7 @@ def main():
         
         expected_count = chap['end'] - chap['start'] + 1
         
-        # Always Generate Local (Required for Phase 3)
+        # We assume local folder is empty due to rmtree, so we generate FRESH.
         try:
             images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
             for idx, img in enumerate(images):
@@ -455,14 +456,14 @@ def main():
                 local_path = os.path.join(chap['local_path'], file_name)
                 img.save(local_path, "JPEG")
                 
-                # 3. SMART DRIVE SYNC (Only upload if missing)
+                # 3. SMART UPLOAD (Only if missing on Drive)
                 if not file_exists_on_drive(file_name, chap['id']):
                     try:
                         file_meta = {'name': file_name, 'parents': [chap['id']]}
                         media = MediaFileUpload(local_path, mimetype='image/jpeg')
                         service.files().create(body=file_meta, media_body=media).execute()
                     except: pass 
-            log(f"   ✅ Processed: {chap['name']}")
+            log(f"   ✅ Generated: {chap['name']}")
         except Exception as e:
             log(f"   ❌ Error: {e}")
 
