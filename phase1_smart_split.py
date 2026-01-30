@@ -1,5 +1,5 @@
 print("╔════════════════════════════════════════════════════╗")
-print("║   AJX PHASE 1: HYBRID + LIVE TELEGRAM TERMINAL     ║")
+print("║   AJX PHASE 1: HYBRID (FORCE LOCAL SYNC)           ║")
 print("╚════════════════════════════════════════════════════╝")
 
 import os
@@ -23,24 +23,24 @@ from PIL import Image, ImageDraw
 
 # --- CONFIGURATION ---
 INPUT_FOLDER_NAME = 'AJX_Input'
-OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output' # Drive Folder Name
-LOCAL_OUTPUT_DIR = 'AJX_Phase1_Output'   # Local Folder for GitHub Artifacts
+OUTPUT_FOLDER_NAME = 'AJX_Phase1_Output'
+LOCAL_OUTPUT_DIR = 'AJX_Phase1_Output'
 USER_INPUT_STR = os.environ.get("USER_PROVIDED_INPUT", "").strip()
 
-# --- 🟢 LIVE TELEGRAM TERMINAL SYSTEM ---
+# --- 🟢 LIVE TELEGRAM TERMINAL ---
 class TelegramTerminal:
     def __init__(self):
         self.token = os.environ.get("TELEGRAM_BOT_TOKEN")
         self.chat_id = os.environ.get("TELEGRAM_CHAT_ID")
         self.message_id = None
         self.last_update_time = 0
-        self.log_buffer = deque(maxlen=10) # Last 10 lines only
+        self.log_buffer = deque(maxlen=10)
         self.current_progress = 0
         self.current_status = "Initializing..."
 
     def start(self):
         if not self.token: return
-        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (HYBRID)</b>\nInitializing...")
+        self.message_id = self._send_new("<b>💻 AJX PHASE 1 (FIXED)</b>\nInitializing...")
 
     def log_stream(self, msg):
         clean_msg = str(msg).replace("<", "&lt;").replace(">", "&gt;") 
@@ -53,16 +53,13 @@ class TelegramTerminal:
         self._refresh_display()
 
     def _refresh_display(self):
-        # Throttle updates (1.5 sec gap)
         if time.time() - self.last_update_time < 1.5 and self.current_progress < 100: return
         if not self.token or not self.message_id: return
-        
         logs_text = "\n".join(self.log_buffer)
         bar_len = 10
         filled = int(bar_len * self.current_progress / 100)
         bar = "█" * filled + "░" * (bar_len - filled)
-        
-        text = (f"<b>💻 AJX PHASE 1 (HYBRID)</b>\n<code>{logs_text}</code>\n"
+        text = (f"<b>💻 AJX PHASE 1 (FIXED)</b>\n<code>{logs_text}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━\n<b>{self.current_status}</b>\n"
                 f"<code>[{bar}] {self.current_progress}%</code>")
         self._edit_msg(text)
@@ -83,10 +80,8 @@ class TelegramTerminal:
             urllib.request.urlopen(urllib.request.Request(url, data=data))
         except: pass
 
-# Initialize Terminal
 terminal = TelegramTerminal()
 
-# Updated Log Function (Console + Telegram)
 def log(msg):
     print(msg)
     sys.stdout.flush()
@@ -141,11 +136,8 @@ def get_folder_id(folder_name, parent_id=None):
 def create_folder(folder_name, parent_id):
     existing = get_folder_id(folder_name, parent_id)
     if existing: return existing
-    
     meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder'}
-    if parent_id:
-        meta['parents'] = [parent_id]
-        
+    if parent_id: meta['parents'] = [parent_id]
     folder = service.files().create(body=meta, fields='id').execute()
     return folder.get('id')
 
@@ -162,7 +154,6 @@ def download_latest_pdf(folder_id):
     return items[0]['name'], items[0]['id']
 
 def perform_download(file_id, file_name):
-    terminal.update_progress(10, f"Downloading PDF...")
     log(f"⬇️ Downloading PDF: {file_name}...")
     request = service.files().get_media(fileId=file_id)
     fh = io.FileIO(file_name, 'wb')
@@ -394,7 +385,7 @@ def main():
     create_folders_recursive(toc_data, book_folder_id, chapter_map, LOCAL_OUTPUT_DIR)
     log(f"✅ Task 2 Complete: Mapped {len(chapter_map)} folders.")
 
-    # --- TASK 3: IMAGE VERIFICATION ---
+    # --- TASK 3: IMAGE VERIFICATION (FORCE LOCAL GENERATION) ---
     log("\n🚀 Task 3: Verifying Images...")
     if not os.path.exists(pdf_name): perform_download(pdf_id, pdf_name)
     
@@ -402,38 +393,46 @@ def main():
     total_chaps = len(chapter_map)
     
     for i, chap in enumerate(chapter_map):
-        # Update Progress Bar
         percent = 60 + int((i / total_chaps) * 40)
         terminal.update_progress(percent, f"Active: {chap['name']}")
         
         expected_count = chap['end'] - chap['start'] + 1
-        current_count = count_files_in_folder(chap['id'])
         
-        log(f"   -> Checking [{chap['name']}]")
+        # 👇 CHANGED LOGIC: Check LOCAL files, not just Cloud
+        local_files = [f for f in os.listdir(chap['local_path']) if f.endswith('.jpg')]
+        local_count = len(local_files)
         
-        if current_count >= expected_count:
-            pass 
-        else:
+        log(f"   -> Checking [{chap['name']}] (Local: {local_count}/{expected_count})")
+        
+        # Force Generation if Local Count is low (Even if Cloud has them)
+        if local_count < expected_count:
             all_complete = False
-            log(f"      ⚠️ Missing Images! Converting...")
+            log(f"      ⚠️ Generating Local Images...")
             try:
                 images = convert_from_path(pdf_name, first_page=chap['start'], last_page=chap['end'], dpi=150)
                 for idx, img in enumerate(images):
                     file_num = idx + 1
                     file_name = f"{file_num}.jpg"
-                    img.save(file_name, "JPEG")
                     
-                    file_meta = {'name': file_name, 'parents': [chap['id']]}
-                    media = MediaFileUpload(file_name, mimetype='image/jpeg')
-                    service.files().create(body=file_meta, media_body=media).execute()
-                    
-                    # Local Save for Artifacts
+                    # 1. Save Local (CRITICAL FOR PHASE 3)
                     final_local_path = os.path.join(chap['local_path'], file_name)
-                    shutil.move(file_name, final_local_path)
+                    img.save(final_local_path, "JPEG")
                     
-                log(f"      🎉 Refilled {len(images)} images.")
+                    # 2. Upload to Drive (Optional, only if missing)
+                    # We skip checking individual drive files to save time, just upload
+                    # Or keep it simple: Just save local. Drive upload takes time.
+                    # Let's upload to be safe for backups.
+                    try:
+                        file_meta = {'name': file_name, 'parents': [chap['id']]}
+                        media = MediaFileUpload(final_local_path, mimetype='image/jpeg')
+                        service.files().create(body=file_meta, media_body=media).execute()
+                    except: pass # Ignore Drive errors if duplicate
+                    
+                log(f"      🎉 Generated {len(images)} images.")
             except Exception as e:
                 log(f"      ❌ Error converting chapter: {e}")
+        else:
+             log("      ✅ Local Images Ready.")
 
     if all_complete:
         cleanup_final_collage(book_folder_id)
