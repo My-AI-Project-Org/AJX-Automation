@@ -1,0 +1,26 @@
+name: AJX Phase 1 Scout
+on:
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install pymupdf google-generativeai firebase-admin natsort
+
+      - name: Run Scout Script
+        env:
+          # Aapke existing secret names yahan map ho rahe hain
+          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+          FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          # Google Drive credentials download ke liye use honge
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+        run: python ajx_scout.py
