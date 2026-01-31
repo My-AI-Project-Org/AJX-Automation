@@ -1,6 +1,6 @@
+pymupdf
 google-generativeai
-Pillow
-tqdm
 firebase-admin
-argparse
-pdf2image
+rapidfuzz
+natsort
+python-dotenv
