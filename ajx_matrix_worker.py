@@ -154,16 +154,30 @@ class EliteMatrixWorker:
             self.thread_status[t_id]['state'] = "ERROR ⚠️"
 
     def start_matrix(self):
+        """Elite Orchestrator: Multi-threading with Non-Blocking Live UI"""
         batch = self.task_data['BATCH']
         topics_with_index = [{"index": i, "topic": t} for i, t in enumerate(batch)]
         
-        with Live(self.make_dashboard(), refresh_per_second=2) as live:
-            # 8 Workers for 8 Threads as per your old logic
+        # Dashboard ko Live mode mein start karna
+        with Live(self.make_dashboard(), refresh_per_second=4) as live:
+            # 8-Key Threaded Engine
             with ThreadPoolExecutor(max_workers=8) as executor:
-                for topic in topics_with_index:
-                    executor.submit(self.fire_engine, topic)
+                # 1. Sabhi tasks ko submit karna aur 'futures' list mein save karna
+                # 'submit' use karne se code block nahi hota aur UI refresh hoti rehti hai
+                futures = [executor.submit(self.fire_engine, t) for t in topics_with_index]
+                
+                # 2. DSA: Monitoring Loop
+                # Jab tak koi bhi thread 'running' hai ya 'not done' hai, loop chalta rahega
+                while any(not f.done() for f in futures):
+                    # Live dashboard ko refresh karna
                     live.update(self.make_dashboard())
-                    time.sleep(0.1)
+                    # CPU par load kam karne ke liye minor sleep
+                    time.sleep(0.2)
+                
+                # 3. Final Verification: Sab khatam hone ke baad ek aakhri update
+                live.update(self.make_dashboard())
+
+        console.print(Panel(f"[bold green]✅ WORKER {self.worker_id} MISSION ACCOMPLISHED![/bold green]"))
 
 if __name__ == "__main__":
     t_file = f"WORKER_TASK_{os.getenv('WORKER_ID', '1')}.JSON"
