@@ -1,6 +1,14 @@
-pymupdf
-google-generativeai
-firebase-admin
-rapidfuzz
-natsort
-python-dotenv
+# --- Core Operations (Purani wali) ---
+pymupdf==1.24.10
+google-generativeai==0.8.3
+firebase-admin==6.5.0
+rapidfuzz==3.9.7
+natsort==8.4.0
+python-dotenv==1.0.1
+
+# --- New Elite Logic (Binary & Speed) ---
+zstandard==0.23.0
+protobuf==5.28.2
+rich==13.9.2
+requests==2.32.3
+google-api-python-client==2.150.0
