@@ -1,4 +1,4 @@
-name: AJX ELITE SYSTEM ENGINE
+name: AJX ELITE SYSTEM ENGINE v6.0
 
 on:
   push:
@@ -8,107 +8,79 @@ on:
   workflow_dispatch:
 
 jobs:
-  # --- PHASE 1: THE MASTER SCOUT ---
   Scout:
     runs-on: ubuntu-latest
     outputs:
       subject: ${{ steps.set-sub.outputs.subject }}
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
-      - name: Install Requirements
-        run: |
-          pip install rich natsort firebase-admin PyMuPDF zstandard
-
-      - name: Run Scout Script
+      - name: Install Dependencies
+        run: pip install rich natsort firebase-admin jq
+      - name: Run Scout
         id: set-sub
         env:
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: |
           python ajx_scout.py
-          # Hum subject name ko detect karke output mein set karte hain
-          echo "subject=UPSI_HISTORY" >> $GITHUB_OUTPUT 
-
-      - name: Upload Task Files
-        uses: actions/upload-artifact@v4
+          # Dynamic Subject Detection Logic
+          SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.JSON)
+          echo "subject=$SUB_NAME" >> $GITHUB_OUTPUT 
+      - uses: actions/upload-artifact@v4
         with:
-          name: worker-tasks
+          name: matrix-tasks
           path: WORKER_TASK_*.JSON
 
-  # --- PHASE 2: THE MATRIX (3 PARALLEL WORKERS) ---
   Matrix-Firing:
     needs: Scout
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false # Ek worker gire toh baaki na rukein
       matrix:
-        worker_id: [1, 2, 3] # Parallel VMs
+        worker_id: [1, 2, 3]
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download Task Files
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: worker-tasks
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+          name: matrix-tasks
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
-      - name: Install Requirements
-        run: |
-          pip install google-generativeai firebase-admin rich PyMuPDF zstandard
-
-      - name: Start Matrix Worker
+      - name: Install Dependencies
+        run: pip install google-generativeai firebase-admin rich PyMuPDF zstandard
+      - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
-          # Rotating Keys based on Worker ID
           KEYS_VM_1: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_2: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_3: ${{ secrets.GEMINI_API_KEYS_LIST }}
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: python ajx_matrix_worker.py
-
-      - name: Upload Partial Backups
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: backup-worker-${{ matrix.worker_id }}
           path: BACKUP/
 
-  # --- PHASE 3: THE FINAL ENCODER ---
   Finalize:
     needs: [Scout, Matrix-Firing]
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Download All Backups
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
           pattern: backup-worker-*
           merge-multiple: true
           path: BACKUP/
-
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-
-      - name: Install Requirements
-        run: |
-          pip install rich natsort firebase-admin zstandard
-
-      - name: Final Encoding & Drive Sync
+      - name: Install Dependencies
+        run: pip install rich natsort firebase-admin zstandard
+      - name: Final Encoding
         env:
           CURRENT_SUBJECT: ${{ needs.Scout.outputs.subject }}
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
