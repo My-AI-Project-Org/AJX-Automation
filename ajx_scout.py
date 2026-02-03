@@ -123,9 +123,33 @@ class AJXScoutElite:
                     
                     syllabus = []
                     if m_id == 1: 
-                        # Method 1 Placeholder or PDF Index Logic
-                        syllabus = [{"topic": f"UNIT_{i}", "chapter": "PDF"} for i in range(1, 11)]
+                        # ✅ REAL LOGIC: INDEX.PDF Read karega
+                        index_file_path = os.path.join(sub_path, "INDEX.pdf")
+                        
+                        if os.path.exists(index_file_path):
+                            try:
+                                doc = fitz.open(index_file_path)
+                                for page in doc:
+                                    text = page.get_text()
+                                    # Har line ko ek Topic maan lete hain
+                                    lines = text.split('\n')
+                                    for line in lines:
+                                        clean_line = line.strip()
+                                        # Sirf tab add karo agar line mein kuch likha ho aur wo page number na ho
+                                        if clean_line and len(clean_line) > 3: 
+                                            syllabus.append({"topic": clean_line, "chapter": "PDF_AUTO"})
+                                            
+                                console.print(f"[green]📖 Read {len(syllabus)} topics from INDEX.pdf[/green]")
+                            except Exception as e:
+                                console.print(f"[red]❌ Error reading PDF: {e}[/red]")
+                                # Error aaya toh fallback dummy data
+                                syllabus = [{"topic": "ERROR_READING_PDF", "chapter": "ERROR"}]
+                        else:
+                            console.print("[red]❌ INDEX.pdf file missing in folder![/red]")
+                            continue
+
                     else:
+                        # Method 2 (JSON Logic - Same as before)
                         with open(os.path.join(sub_path, files["SYLLABUS_DB.JSON"]), 'r') as f:
                             syllabus = json.load(f)
 
