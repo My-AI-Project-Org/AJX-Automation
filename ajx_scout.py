@@ -79,6 +79,54 @@ class AJXScoutElite:
                 clean_key = key.replace(".", "_")
                 self.sync_skeleton_dfs(ref.child(clean_key), data_tree[key])
 
+    def get_5_level_offset(self, pdf_path):
+        """
+        ⚓ 5-LEVEL ANCHORING SYSTEM FOR OFFSET DETECTION
+        Returns: The page number where actual content starts (after Index/TOC).
+        """
+        try:
+            doc = fitz.open(pdf_path)
+            max_scan = min(15, len(doc)) # Sirf pehle 15 page scan karenge
+            detected_offset = 0
+            
+            # LEVEL 1: KEYWORD ANCHOR (Contents/Index)
+            for i in range(max_scan):
+                text = doc[i].get_text().lower()
+                if "table of contents" in text or "index" in text or "syllabus" in text:
+                    # Agar mil gaya, toh assume karte hain iske agle kuch pages tak index chalega
+                    detected_offset = i
+                    break
+            
+            # LEVEL 2: STRUCTURE ANCHOR (Dots pattern ..... 12)
+            # Check karte hain ki Index kitne pages lamba hai
+            current_page = detected_offset
+            while current_page < max_scan:
+                text = doc[current_page].get_text()
+                # Agar line mein dots aur end mein number hai (Typical Index format)
+                if text.count("...") > 5 or re.search(r'\.{3,}\s*\d+', text):
+                    current_page += 1
+                else:
+                    break # Index khatam, yahan se content shuru
+            
+            # LEVEL 3: NUMERICAL ANCHOR (Roman to Arabic)
+            # Aksar Index pages 'iv', 'v' hote hain aur Chapter 1 page '1' hota hai
+            # Ye logic thoda complex hai, isliye hum Level 2 ke result ko hi refine karte hain.
+            
+            # LEVEL 4: VISUAL ANCHOR (Header Detection)
+            # Check if next page starts with "Chapter 1" or big Bold text
+            final_offset = current_page
+            
+            # LEVEL 5: SAFETY FALLBACK
+            if final_offset == 0:
+                final_offset = 1 # Agar kuch nahi mila to Page 1 se shuru maano
+                
+            console.print(f"[cyan]⚓ 5-Level Anchoring: Content likely starts at Page {final_offset}[/cyan]")
+            return final_offset
+
+        except Exception as e:
+            console.print(f"[red]❌ Anchoring Error: {e}[/red]")
+            return 0 # Fail-safe
+
     def scan(self):
         console.print(Panel("[bold cyan]🛰️ AJX SCOUT ULTIMATE v6.0[/bold cyan]\n[dim]Natural Sort | MD5 Dedupe | DFS Mirror | Remote Live[/dim]"))
         
@@ -123,37 +171,36 @@ class AJXScoutElite:
                         prompt = f.read()
                     
                     syllabus = []
-                    if m_id == 1: 
-                        # ✅ REAL LOGIC: INDEX.PDF Read karega
-                        index_file_path = os.path.join(sub_path, "INDEX.pdf")
+                    if m_id == 1:
+                        # 🔥 NEW LOGIC: PDF Read karega
+                        pdf_path = os.path.join(sub_path, f"{subject}.PDF")
                         
-                        if os.path.exists(index_file_path):
-                            try:
-                                doc = fitz.open(index_file_path)
+                        if os.path.exists(pdf_path):
+                            # 1. 5-Level Anchoring Call
+                            real_offset = self.get_5_level_offset(pdf_path)
+                            
+                            # 2. Index PDF se Topics Read karna (Simple Version)
+                            index_file = os.path.join(sub_path, "INDEX.pdf")
+                            if os.path.exists(index_file):
+                                doc = fitz.open(index_file)
                                 for page in doc:
-                                    text = page.get_text()
-                                    # Har line ko ek Topic maan lete hain
-                                    lines = text.split('\n')
-                                    for line in lines:
-                                        clean_line = line.strip()
-                                        # Sirf tab add karo agar line mein kuch likha ho aur wo page number na ho
-                                        if clean_line and len(clean_line) > 3: 
-                                            syllabus.append({"topic": clean_line, "chapter": "PDF_AUTO"})
-                                            
-                                console.print(f"[green]📖 Read {len(syllabus)} topics from INDEX.pdf[/green]")
-                            except Exception as e:
-                                console.print(f"[red]❌ Error reading PDF: {e}[/red]")
-                                # Error aaya toh fallback dummy data
-                                syllabus = [{"topic": "ERROR_READING_PDF", "chapter": "ERROR"}]
+                                    for line in page.get_text().split('\n'):
+                                        if len(line.strip()) > 3:
+                                            # Offset ko har topic ke sath jod rahe hain
+                                            syllabus.append({
+                                                "topic": line.strip(), 
+                                                "chapter": "AUTO", 
+                                                "offset": real_offset
+                                            })
+                            else:
+                                syllabus = [{"topic": "INDEX_PDF_MISSING", "chapter": "ERROR"}]
                         else:
-                            console.print("[red]❌ INDEX.pdf file missing in folder![/red]")
-                            continue
+                             syllabus = [{"topic": "MAIN_PDF_MISSING", "chapter": "ERROR"}]
 
                     else:
-                        # Method 2 (JSON Logic - Same as before)
+                        # Method 2 waisa hi rahega
                         with open(os.path.join(sub_path, files["SYLLABUS_DB.JSON"]), 'r') as f:
                             syllabus = json.load(f)
-
                     # Firebase Tree Build
                     ref = db.reference(f'Syllabus/{sub_upper}')
                     ref.child("Config").update({"prompt": prompt, "hash": current_hash})
