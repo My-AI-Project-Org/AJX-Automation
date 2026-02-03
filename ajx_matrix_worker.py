@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 from rich.panel import Panel
+import base64
+import hashlib
 
 console = Console()
 
@@ -107,15 +109,27 @@ class EliteMatrixWorker:
         except Exception: return None
 
     def pack_and_sync(self, topic, data):
-        """Sync Logic from your old script"""
+        """Fixed Sync Logic: Uses Base64 for Android App Compatibility"""
+        
+        # 1. JSON String (Data ko text banao)
         packed_str = json.dumps(data)
-        compressed = self.compressor.compress(packed_str.encode('utf-8'))
+        
+        # 2. Compress (Zstd Level 3)
+        compressed_bytes = self.compressor.compress(packed_str.encode('utf-8'))
+        
+        # 3. 🔥 FIX: Hex hata kar Base64 lagaya (App isi format ko padhta hai)
+        payload_base64 = base64.b64encode(compressed_bytes).decode('utf-8')
+        
+        # 4. 🔥 ADD: MD5 Hash generate kiya (SyncManager ko check karne ke liye)
+        md5_hash = hashlib.md5(payload_base64.encode()).hexdigest()
+
         topic_node = str(topic).replace(".", "_")
         
-        # Firebase Sync
+        # Firebase Sync (Ab App crash nahi hoga)
         db.reference(f"Syllabus/{self.subject}/Data/{topic_node}").update({
             "status": "COMPLETED",
-            "payload": compressed.hex(),
+            "payload": payload_base64,  # ✅ Base64 (Compact & Compatible)
+            "hash": md5_hash,           # ✅ Hash (For Verification)
             "mcq_count": len(data)
         })
 
