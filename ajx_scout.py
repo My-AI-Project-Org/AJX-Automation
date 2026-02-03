@@ -1,4 +1,5 @@
 import os
+import fitz
 import json
 import math
 import hashlib
