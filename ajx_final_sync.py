@@ -44,11 +44,15 @@ class AJXFinalEncoder:
         return len(files)
 
     def train_zstd_dictionary(self):
-        """DSA: Dictionary Patterns Training"""
-        samples = [open(os.path.join(self.backup_path, f), 'rb').read() for f in os.listdir(self.backup_path)]
-        dict_data = zstd.train_dictionary(102400, samples)
-        with open(f"{self.export_path}/compression.dict", "wb") as f:
-            f.write(dict_data.as_bytes())
+        """
+        ⚠️ DISABLED: Dictionary training requires RAW text.
+        Since workers send compressed data, we skip this to avoid corruption.
+        Standard Zstd (Level 3) is enough for now.
+        """
+        print("⚠️ Dictionary Training Skipped (Optimization for Distributed System)")
+        # Dummy file bana dete hain taaki code na phate
+        with open(f"{self.export_path}/compression.dict", "w") as f:
+            f.write("DISABLED")
 
     def drive_finalize(self):
         """DevOps: Mirroring backup to organized structure"""
