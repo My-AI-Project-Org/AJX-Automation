@@ -7,41 +7,60 @@ import google.generativeai as genai
 from concurrent.futures import ThreadPoolExecutor
 import firebase_admin
 from firebase_admin import credentials, db
-import fitz  # PyMuPDF
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 from rich.panel import Panel
 import base64
 import hashlib
+import PIL.Image
 
 console = Console()
 
-# --- FIREBASE SETUP ---
+# --- FIREBASE SETUP (DO NOT TOUCH) ---
 if not firebase_admin._apps:
-    FIREBASE_KEY = json.loads(os.getenv("FIREBASE_SERVICE_KEY"))
-    DB_URL = os.getenv("FIREBASE_DB_URL")
-    cred = credentials.Certificate(FIREBASE_KEY)
-    firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
+    try:
+        key_json = os.environ.get("FIREBASE_SERVICE_KEY")
+        if key_json:
+            cred = credentials.Certificate(json.loads(key_json))
+        else:
+            cred = credentials.Certificate("serviceAccountKey.json")
+        
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': os.environ.get("FIREBASE_DB_URL")
+        })
+    except Exception as e:
+        console.print(f"[red]⚠️ Firebase Error: {e}[/red]")
 
 class EliteMatrixWorker:
     def __init__(self, task_file):
-        with open(task_file, 'r') as f:
+        with open(task_file, 'r', encoding='utf-8') as f:
             self.task_data = json.load(f)
-        self.worker_id = os.getenv('WORKER_ID', '1')
-        self.keys = os.getenv(f"KEYS_VM_{self.worker_id}").split(",")
-        self.compressor = zstd.ZstdCompressor(level=3)
-        self.subject = self.task_data['SUBJECT']
         
-        # UI & Thread Tracking
-        self.completed_count = 0
-        self.total_topics = len(self.task_data['BATCH'])
-        self.thread_status = {f"T{i+1}": {"key": f"Key-{i+1:02}", "topic": "Idle...", "state": "WAITING"} for i in range(8)}
+        self.worker_id = self.task_data.get('WORKER_ID', '1')
+        self.subject = self.task_data['SUBJECT']
+        self.method_type = self.task_data.get('METHOD_TYPE', 'METHOD_1')
+        
+        # Load Keys from Env (Comma Separated)
+        self.keys = os.getenv(f"KEYS_VM_{self.worker_id}", "").split(",")
+        if not self.keys or self.keys == [""]:
+            console.print("[red]❌ No API Keys found in Environment![/red]")
+            exit()
 
+        self.compressor = zstd.ZstdCompressor(level=3)
+        
+        # UI Tracking
+        self.completed_count = 0
+        self.total_topics = len(self.task_data['BATCH_DATA'])
+        self.thread_status = {f"T{i+1}": {"key": "...", "topic": "Idle...", "state": "WAITING"} for i in range(8)}
+
+    # --- JSON REPAIR SYSTEM (DO NOT TOUCH) ---
     def recursive_repair(self, raw_text, attempt=1):
-        """DSA: Recursive Logic from your old script"""
         try:
             clean_text = re.sub(r'```json|```', '', raw_text).strip()
+            # Remove any non-json preamble
+            if "[" in clean_text: clean_text = "[" + clean_text.split("[", 1)[1]
+            if "]" in clean_text: clean_text = clean_text.rsplit("]", 1)[0] + "]"
             return json.loads(clean_text)
         except Exception:
             if attempt < 3:
@@ -50,152 +69,204 @@ class EliteMatrixWorker:
             return None
 
     def fix_json_syntax(self, text):
-        """Regex Repair from your old script"""
         text = text.strip()
         if not text.endswith("]"): text += "]"
         if not text.startswith("["): text = "[" + text
         return text
 
+    # --- UI DASHBOARD (DO NOT TOUCH) ---
     def make_dashboard(self):
-        """The Elite Hacker UI you requested"""
-        pct = (self.completed_count / self.total_topics) * 100
-        prog_bar = f"🔥 PROGRESS: [[green]{'🏁' * int(pct/10)}{'─' * (10-int(pct/10))}[/green]] {pct:.1f}% ({self.completed_count}/{self.total_topics} Topics)"
+        pct = (self.completed_count / self.total_topics) * 100 if self.total_topics > 0 else 0
+        prog_bar = f"🔥 PROGRESS: [[green]{'█' * int(pct/10)}{'░' * (10-int(pct/10))}[/green]] {pct:.1f}% ({self.completed_count}/{self.total_topics})"
         
         table = Table(box=None, expand=True)
         table.add_column("🧵 Thread", style="magenta")
-        table.add_column("🔑 Key Source", style="cyan")
-        table.add_column("🎯 Current Topic", style="white")
+        table.add_column("🔑 Key", style="cyan")
+        table.add_column("📂 Target", style="white")
         table.add_column("⚡ Status", justify="right")
 
         for t_id, info in self.thread_status.items():
-            color = "green" if "COMPLETED" in info['state'] else "yellow"
+            color = "green" if "DONE" in info['state'] else "yellow"
             if "ERROR" in info['state']: color = "red"
-            table.add_row(t_id, info['key'], info['topic'], f"[{color}]{info['state']}[/{color}]")
+            table.add_row(t_id, info['key'][-4:], info['topic'], f"[{color}]{info['state']}[/{color}]")
 
         dashboard = Panel(
-            f"🚀 [bold cyan]AJX MATRIX WORKER #{self.worker_id}[/bold cyan] | [green]🟢 STATUS: FIRING[/green]\n"
-            f"📊 SUBJECT: {self.subject} | 🛰️ MODE: [METHOD {self.task_data['METHOD']}]\n\n"
+            f"🚀 [bold cyan]AJX MATRIX WORKER #{self.worker_id}[/bold cyan] | [green]🟢 ONLINE[/green]\n"
+            f"📊 SUBJECT: {self.subject} | 🛠️ MODE: {self.method_type}\n\n"
             f"{prog_bar}\n"
-            f"─────────────────────────────────────────────────────────────────────────────\n"
-            f"🧵 ACTIVE THREADS (8-KEY ROTATION):\n"
             f"─────────────────────────────────────────────────────────────────────────────\n"
             + str(console.render_str(str(table))) +
             f"\n─────────────────────────────────────────────────────────────────────────────\n"
-            f"📡 CLOUD STATUS: 💾 Drive: [green][SYNCED][/green] | 🔥 Firebase: [green][LIVE][/green] | 📦 Zstd: Active",
+            f"📡 SYNC: Firebase [LIVE] | Compression [ZSTD]",
             border_style="bright_blue"
         )
         return dashboard
 
-    def process_method_1(self, model, topic_data):
-        """Method 1 from your old script"""
-        try:
-            pdf_path = os.path.join(self.task_data['SOURCE_PATH'], f"{self.subject}.PDF")
-            doc = fitz.open(pdf_path)
-            page_num = topic_data.get('page', 0)
-            page = doc[page_num]
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img_data = pix.tobytes("jpeg")
-            prompt = self.task_data.get('MASTER_PROMPT')
-            response = model.generate_content([prompt, {"mime_type": "image/jpeg", "data": img_data}])
-            return self.recursive_repair(response.text)
-        except Exception: return None
+    # ==========================================
+    # 🧠 NEW: PROCESS LOGIC (UPDATED)
+    # ==========================================
 
-    def process_method_2(self, model, topic_data):
-        """Method 2 from your old script"""
-        prompt = f"Topic: {topic_data['topic']}\nInstructions: {self.task_data.get('MASTER_PROMPT')}"
-        try:
-            response = model.generate_content(prompt)
-            return self.recursive_repair(response.text)
-        except Exception: return None
-
-    def pack_and_sync(self, topic, data):
-        """Fixed Sync Logic: Uses Base64 for Android App Compatibility"""
+    def process_task(self, model, task_item):
+        """Decides whether to use Image Mode or Text Mode based on Scout Data"""
         
-        # 1. JSON String (Data ko text banao)
+        # 1. PREPARE PROMPT (Inject Formatting Rules)
+        base_prompt = self.task_data.get('MASTER_PROMPT', 'Generate MCQs')
+        
+        # Add ID Instructions (Crucial for Display)
+        # We ask LLM to start from 1, we will map Global ID later in Python
+        prompt_instructions = (
+            f"\n\nContext Topic: {task_item['chapter_name']}\n"
+            f"IMPORTANT: Output pure JSON list of objects. "
+            f"Each object must have 'question', 'options' (list), 'answer', 'explanation'. "
+            f"Start serial numbering from {task_item.get('display_num_start', 1)}."
+        )
+        
+        final_prompt = base_prompt + prompt_instructions
+
+        # 2. CHECK MODE (Image vs Text)
+        images = task_item.get('images', [])
+        
+        try:
+            response = None
+            
+            # --- METHOD 1: IMAGE MODE ---
+            if images: 
+                # Load Images from Disk (Scout already extracted them)
+                img_objects = []
+                for img_file in images:
+                    img_path = os.path.join(task_item['folder_path'], img_file)
+                    if os.path.exists(img_path):
+                        img_objects.append(PIL.Image.open(img_path))
+                
+                if not img_objects:
+                    return None # Images missing?
+                
+                # Send to Gemini (Prompt + Images)
+                content = [final_prompt] + img_objects
+                response = model.generate_content(content)
+
+            # --- METHOD 2: TEXT/TOPIC MODE ---
+            else:
+                response = model.generate_content(final_prompt)
+            
+            # 3. REPAIR JSON
+            data = self.recursive_repair(response.text)
+            
+            # 4. 🛡️ GLOBAL ID INJECTION (The Safety Lock)
+            # LLM might mess up IDs, so we overwrite them with Scout's Math.
+            if data and isinstance(data, list):
+                current_global_id = task_item['global_id_start']
+                current_display_num = task_item.get('display_num_start', 1)
+                
+                for q in data:
+                    q['id'] = current_global_id         # DB Unique Key
+                    q['display_num'] = current_display_num # User Friendly Key
+                    
+                    current_global_id += 1
+                    current_display_num += 1
+                return data
+            
+            return None
+
+        except Exception as e:
+            # console.print(f"Gen Error: {e}")
+            return None
+
+    # ==========================================
+    # 📦 SYNC LOGIC (UPDATED PATHS)
+    # ==========================================
+
+    def pack_and_sync(self, task_item, data):
+        """Syncs data to Firebase with correct Unit/Chapter hierarchy"""
+        
+        # 1. Compress & Encrypt (Standard)
         packed_str = json.dumps(data)
-        
-        # 2. Compress (Zstd Level 3)
         compressed_bytes = self.compressor.compress(packed_str.encode('utf-8'))
-        
-        # 3. 🔥 FIX: Hex hata kar Base64 lagaya (App isi format ko padhta hai)
         payload_base64 = base64.b64encode(compressed_bytes).decode('utf-8')
-        
-        # 4. 🔥 ADD: MD5 Hash generate kiya (SyncManager ko check karne ke liye)
         md5_hash = hashlib.md5(payload_base64.encode()).hexdigest()
 
-        topic_node = str(topic).replace(".", "_")
+        # 2. Clean Path Construction
+        # Scout ensures names are safe, but we double check
+        unit_node = task_item['unit_name'].replace(".", "").replace("/", "_")
+        chap_node = task_item['chapter_name'].replace(".", "").replace("/", "_")
         
-        # Firebase Sync (Ab App crash nahi hoga)
-        db.reference(f"Syllabus/{self.subject}/Data/{topic_node}").update({
+        # Path: Syllabus/History/Data/01_Ancient/01_Stone_Age
+        # Note: 'folder_path' from Scout usually contains the hierarchy
+        # We can also use the structure directly if Scout passed raw names
+        
+        # Construct path using the specific hierarchy provided by Scout's folder structure
+        # task_item['folder_path'] example: "EXTRACTED_ASSETS/01_Ancient/01_Stone_Age"
+        path_parts = task_item['folder_path'].split(os.sep)
+        if len(path_parts) >= 3:
+            unit_folder = path_parts[-2]
+            chap_folder = path_parts[-1]
+        else:
+            # Fallback
+            unit_folder = "Uncategorized"
+            chap_folder = chap_node
+
+        # Firebase Update
+        ref_path = f"Syllabus/{self.subject}/Data/{unit_folder}/{chap_folder}"
+        
+        db.reference(ref_path).update({
             "status": "COMPLETED",
-            "payload": payload_base64,  # ✅ Base64 (Compact & Compatible)
-            "hash": md5_hash,           # ✅ Hash (For Verification)
-            "mcq_count": len(data)
+            "payload": payload_base64,
+            "hash": md5_hash,
+            "count": len(data),
+            "global_id_start": task_item['global_id_start']
         })
 
-        # Local Backup for G-Drive
-        backup_dir = f"BACKUP/{self.subject}"
-        os.makedirs(backup_dir, exist_ok=True)
-        with open(f"{backup_dir}/{topic_node}.json", "w") as f:
-            json.dump(data, f, indent=4)
+    # ==========================================
+    # ⚙️ ENGINE (THREAD LOGIC)
+    # ==========================================
 
-    def fire_engine(self, topic_data):
-        """The Orchestrator matching your 8-key requirement"""
-        t_id = f"T{(topic_data['index'] % 8) + 1}"
-        key_index = topic_data['index'] % len(self.keys)
-        topic_name = topic_data['topic']
+    def fire_engine(self, task_item, index):
+        t_id = f"T{(index % 8) + 1}"
+        key_index = index % len(self.keys)
         
-        self.thread_status[t_id].update({"topic": topic_name[:30], "state": "GENERATING..."})
+        chap_name = task_item['chapter_name'][:20]
+        self.thread_status[t_id].update({"key": f"...{self.keys[key_index][-4:]}", "topic": chap_name, "state": "GENERATING..."})
         
         try:
             genai.configure(api_key=self.keys[key_index])
             model = genai.GenerativeModel('gemini-2.0-flash')
             
-            mcqs = None
-            if self.task_data['METHOD'] == 1:
-                mcqs = self.process_method_1(model, topic_data)
-            else:
-                mcqs = self.process_method_2(model, topic_data)
+            # CALL PROCESSOR
+            mcqs = self.process_task(model, task_item)
 
             if mcqs:
                 self.thread_status[t_id]['state'] = "SYNCING..."
-                self.pack_and_sync(topic_name, mcqs)
+                self.pack_and_sync(task_item, mcqs)
                 self.completed_count += 1
-                self.thread_status[t_id]['state'] = "COMPLETED 💎"
+                self.thread_status[t_id]['state'] = "DONE 💎"
             else:
-                self.thread_status[t_id]['state'] = "REPAIRING JSON 🛠️"
-        except Exception:
-            self.thread_status[t_id]['state'] = "ERROR ⚠️"
+                self.thread_status[t_id]['state'] = "RETRY/FAIL ⚠️"
+                
+        except Exception as e:
+            self.thread_status[t_id]['state'] = "ERROR 🔴"
 
     def start_matrix(self):
-        """Elite Orchestrator: Multi-threading with Non-Blocking Live UI"""
-        batch = self.task_data['BATCH']
-        topics_with_index = [{"index": i, "topic": t} for i, t in enumerate(batch)]
+        batch = self.task_data['BATCH_DATA'] # Correct Key from Scout
         
-        # Dashboard ko Live mode mein start karna
         with Live(self.make_dashboard(), refresh_per_second=4) as live:
-            # 8-Key Threaded Engine
             with ThreadPoolExecutor(max_workers=8) as executor:
-                # 1. Sabhi tasks ko submit karna aur 'futures' list mein save karna
-                # 'submit' use karne se code block nahi hota aur UI refresh hoti rehti hai
-                futures = [executor.submit(self.fire_engine, t) for t in topics_with_index]
+                # Map futures
+                futures = [executor.submit(self.fire_engine, item, i) for i, item in enumerate(batch)]
                 
-                # 2. DSA: Monitoring Loop
-                # Jab tak koi bhi thread 'running' hai ya 'not done' hai, loop chalta rahega
                 while any(not f.done() for f in futures):
-                    # Live dashboard ko refresh karna
                     live.update(self.make_dashboard())
-                    # CPU par load kam karne ke liye minor sleep
-                    time.sleep(0.2)
+                    time.sleep(0.5)
                 
-                # 3. Final Verification: Sab khatam hone ke baad ek aakhri update
                 live.update(self.make_dashboard())
 
-        console.print(Panel(f"[bold green]✅ WORKER {self.worker_id} MISSION ACCOMPLISHED![/bold green]"))
+        console.print(Panel(f"[bold green]✅ WORKER {self.worker_id} FINISHED![/bold green]"))
 
 if __name__ == "__main__":
-    t_file = f"WORKER_TASK_{os.getenv('WORKER_ID', '1')}.JSON"
+    # Auto-detect task file based on Environment Variable or Loop
+    w_id = os.getenv('WORKER_ID', '1')
+    t_file = f"WORKER_TASK_{w_id}.json"
+    
     if os.path.exists(t_file):
         EliteMatrixWorker(t_file).start_matrix()
     else:
-        console.print("[red]❌ Task File Not Found.[/red]")
+        console.print(f"[red]❌ Task File '{t_file}' Not Found.[/red]")
