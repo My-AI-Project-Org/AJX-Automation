@@ -1,239 +1,344 @@
 import os
-import fitz
 import json
-import math
-import hashlib
+import fitz  # PyMuPDF
 import re
-import firebase_admin
-from firebase_admin import credentials, db
+import shutil
+import math
+import time
 from natsort import natsorted
 from rich.console import Console
-from rich.table import Table
-from rich.live import Live
 from rich.panel import Panel
+from rich.progress import Progress
+
+# --- FIREBASE SETUP ---
+import firebase_admin
+from firebase_admin import credentials, db
+
+# Initialize Firebase
+# NOTE: Ensure 'FIREBASE_SERVICE_KEY' env variable contains your JSON key content
+# OR replace the try-block with: cred = credentials.Certificate("path/to/key.json")
+if not firebase_admin._apps:
+    try:
+        key_json = os.environ.get("FIREBASE_SERVICE_KEY")
+        if key_json:
+            cred = credentials.Certificate(json.loads(key_json))
+        else:
+            # Fallback for local testing
+            cred = credentials.Certificate("serviceAccountKey.json") 
+            
+        firebase_admin.initialize_app(cred, {
+            'databaseURL': os.environ.get("FIREBASE_DB_URL", "https://YOUR-APP-ID.firebaseio.com")
+        })
+    except Exception as e:
+        print(f"⚠️ Firebase Warning: {e} (Running in Offline Mode)")
 
 console = Console()
 
-# --- 1. FIREBASE INITIALIZATION ---
-if not firebase_admin._apps:
-    FIREBASE_KEY = json.loads(os.getenv("FIREBASE_SERVICE_KEY"))
-    DB_URL = os.getenv("FIREBASE_DB_URL")
-    cred = credentials.Certificate(FIREBASE_KEY)
-    firebase_admin.initialize_app(cred, {'databaseURL': DB_URL})
+# --- CONFIGURATION ---
+BASE_DIRS = ["METHOD_1", "METHOD_2"] 
+ASSETS_DIR_NAME = "EXTRACTED_ASSETS"
+TASK_FILE_PREFIX = "WORKER_TASK"
 
 class AJXScoutElite:
     def __init__(self):
-        self.method_dirs = {"METHOD_1": 1, "METHOD_2": 2}
-        self.cache_file = ".ajx_cache.json"
-        self.cache = self.load_cache()
+        # Dynamic keywords for Unit detection (Subject agnostic)
+        self.unit_keywords = [
+            "ANCIENT HISTORY", "MEDIEVAL HISTORY", "MODERN HISTORY",
+            "GEOGRAPHY", "POLITY", "ECONOMY", "SCIENCE", "ENVIRONMENT",
+            "SECTION", "UNIT", "PART", "KHAND", "GENERAL STUDIES"
+        ]
         self.monitor_ref = None
 
-    def load_cache(self):
-        if os.path.exists(self.cache_file):
-            with open(self.cache_file, 'r') as f: return json.load(f)
-        return {}
-
-    # --- DSA: NATURAL SORTING LOGIC (From Old Script) ---
-    def natural_sort_key(self, text):
-        return [int(c) if c.isdigit() else c.lower() for c in re.split('([0-9]+)', text)]
-
-    def get_md5(self, folder_path):
-        """DevOps: O(1) Folder Hashing for Deduplication"""
-        hash_md5 = hashlib.md5()
-        for root, dirs, files in os.walk(folder_path):
-            for names in natsorted(files): # Ensure hash consistency with sorting
-                filepath = os.path.join(root, names)
-                with open(filepath, 'rb') as f:
-                    for chunk in iter(lambda: f.read(4096), b""):
-                        hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-
-    def update_remote_monitor(self, subject, status, progress, current_task=""):
-        """DevOps: Real-time Terminal Sync to Firebase Console"""
-        if not self.monitor_ref:
-            self.monitor_ref = db.reference(f'Monitoring/{subject}/Scout')
-        self.monitor_ref.update({
-            "status": status,
-            "progress": f"{progress}%",
-            "current_task": current_task,
-            "last_ping": "2026-02-01 14:15:00"
-        })
-
-    def sync_skeleton_dfs(self, ref, data_tree):
-        """DSA: Depth-First Search Recursive N-ary Tree Construction"""
-        if isinstance(data_tree, list):
-            # Apply Natural Sort to topics before syncing
-            sorted_data = natsorted(data_tree, key=lambda x: self.natural_sort_key(str(x.get('topic', ''))))
-            for item in sorted_data:
-                topic = str(item.get('topic', 'Main')).replace(".", "_")
-                if not ref.child(topic).get():
-                    ref.child(topic).set({
-                        "status": "SKELETON_READY", 
-                        "mcq_count": 0,
-                        "method_hint": "DFS_BRANCH"
-                    })
-        elif isinstance(data_tree, dict):
-            # Natural sort the keys of the dictionary
-            sorted_keys = natsorted(data_tree.keys(), key=self.natural_sort_key)
-            for key in sorted_keys:
-                clean_key = key.replace(".", "_")
-                self.sync_skeleton_dfs(ref.child(clean_key), data_tree[key])
-
-    def get_5_level_offset(self, pdf_path):
+    def update_remote_monitor(self, subject, status, progress, message):
         """
-        ⚓ 5-LEVEL ANCHORING SYSTEM FOR OFFSET DETECTION
-        Returns: The page number where actual content starts (after Index/TOC).
+        FIREBASE BRAIN: Real-time status update.
+        Visible in App/Console immediately.
         """
         try:
-            doc = fitz.open(pdf_path)
-            max_scan = min(15, len(doc)) # Sirf pehle 15 page scan karenge
-            detected_offset = 0
+            if not self.monitor_ref:
+                self.monitor_ref = db.reference(f'Monitoring/{subject}/Scout')
             
-            # LEVEL 1: KEYWORD ANCHOR (Contents/Index)
-            for i in range(max_scan):
-                text = doc[i].get_text().lower()
-                if "table of contents" in text or "index" in text or "syllabus" in text:
-                    # Agar mil gaya, toh assume karte hain iske agle kuch pages tak index chalega
-                    detected_offset = i
+            self.monitor_ref.update({
+                "status": status,
+                "progress": progress,
+                "current_task": message,
+                "last_updated": int(time.time() * 1000)
+            })
+        except:
+            pass # Fail silently if internet issue
+
+    def clean_filename(self, name):
+        """
+        Ensures folder names are safe for OS, Firebase, and App sorting.
+        Example: "Unit 1: Stone Age!" -> "Unit_1_Stone_Age"
+        """
+        clean = re.sub(r'[^\w\s-]', '', name)
+        clean = re.sub(r'[-\s]+', '_', clean).strip()
+        return clean[:50]  # Limit length
+
+    # ==========================================
+    # 🧠 METHOD 1 LOGIC (PDF PARSING)
+    # ==========================================
+
+    def parse_index_structure(self, index_pdf_path):
+        """DSA: Parsing Index PDF into a Structured N-ary Tree."""
+        console.print(f"[cyan]🔍 Analyzing Index Structure...[/cyan]")
+        doc = fitz.open(index_pdf_path)
+        full_text = ""
+        for page in doc: full_text += page.get_text() + "\n"
+        
+        lines = full_text.split('\n')
+        # Regex: 1. Topic Name ... B10-B15
+        chapter_pattern = re.compile(r'(\d+)\.\s+(.*?)\s+([B]?\d+\s*-\s*[B]?\d+)')
+        
+        detected_items = []
+        current_unit = "General_Section"
+        
+        for line in lines:
+            line = line.strip()
+            if not line: continue
+            
+            # Unit Detection
+            line_upper = line.upper()
+            for kw in self.unit_keywords:
+                if kw in line_upper and len(line) < 60:
+                    current_unit = self.clean_filename(line)
                     break
             
-            # LEVEL 2: STRUCTURE ANCHOR (Dots pattern ..... 12)
-            # Check karte hain ki Index kitne pages lamba hai
-            current_page = detected_offset
-            while current_page < max_scan:
-                text = doc[current_page].get_text()
-                # Agar line mein dots aur end mein number hai (Typical Index format)
-                if text.count("...") > 5 or re.search(r'\.{3,}\s*\d+', text):
-                    current_page += 1
-                else:
-                    break # Index khatam, yahan se content shuru
-            
-            # LEVEL 3: NUMERICAL ANCHOR (Roman to Arabic)
-            # Aksar Index pages 'iv', 'v' hote hain aur Chapter 1 page '1' hota hai
-            # Ye logic thoda complex hai, isliye hum Level 2 ke result ko hi refine karte hain.
-            
-            # LEVEL 4: VISUAL ANCHOR (Header Detection)
-            # Check if next page starts with "Chapter 1" or big Bold text
-            final_offset = current_page
-            
-            # LEVEL 5: SAFETY FALLBACK
-            if final_offset == 0:
-                final_offset = 1 # Agar kuch nahi mila to Page 1 se shuru maano
-                
-            console.print(f"[cyan]⚓ 5-Level Anchoring: Content likely starts at Page {final_offset}[/cyan]")
-            return final_offset
+            # Chapter Detection
+            match = chapter_pattern.search(line)
+            if match:
+                try:
+                    topic_name = match.group(2).strip()
+                    range_str = match.group(3).strip().replace(" ", "")
+                    numbers = re.findall(r'\d+', range_str)
+                    if len(numbers) >= 2:
+                        detected_items.append({
+                            "unit": current_unit,
+                            "chapter": self.clean_filename(topic_name),
+                            "original_topic": topic_name,
+                            "start_p": int(numbers[0]),
+                            "end_p": int(numbers[1])
+                        })
+                except: continue
 
-        except Exception as e:
-            console.print(f"[red]❌ Anchoring Error: {e}[/red]")
-            return 0 # Fail-safe
+        # Grouping
+        detected_items.sort(key=lambda x: x['unit']) 
+        structure = []
+        from itertools import groupby
+        for key, group in groupby(detected_items, key=lambda x: x['unit']):
+            structure.append({"unit_name": key, "chapters": list(group)})
+            
+        return structure
 
-    def scan(self):
-        console.print(Panel("[bold cyan]🛰️ AJX SCOUT ULTIMATE v6.0[/bold cyan]\n[dim]Natural Sort | MD5 Dedupe | DFS Mirror | Remote Live[/dim]"))
+    def calculate_5_level_offset(self, main_pdf_path, anchor_chapter):
+        """ALGORITHM: 5-Level Anchoring to find Real Offset."""
+        console.print("[yellow]⚓ Calculating Offset...[/yellow]")
+        doc = fitz.open(main_pdf_path)
+        target_name = anchor_chapter['original_topic'].lower()[:15]
+        target_index_page = anchor_chapter['start_p']
+        detected_page = -1
         
-        for m_dir, m_id in self.method_dirs.items():
-            if not os.path.exists(m_dir): continue
+        for i in range(min(30, len(doc))):
+            page = doc[i]
+            blocks = page.get_text("blocks")
+            plain_text = page.get_text().lower()
             
-            # Natural sort subjects
-            for subject in natsorted(os.listdir(m_dir)):
-                sub_path = os.path.join(m_dir, subject)
-                if not os.path.isdir(sub_path): continue
+            if target_name in plain_text:
+                if len(blocks) > 5: # Content Density Check
+                    detected_page = i + 1
+                    console.print(f"[green]✅ Anchor Found at PDF Page {detected_page}[/green]")
+                    break
+        
+        return (detected_page - target_index_page) if detected_page != -1 else 0
+
+    def extract_and_persist_smart(self, pdf_path, structure, offset, output_root, subject_name):
+        """
+        SMART ENGINE: Extracts Images & Resumes if stopped.
+        """
+        doc = fitz.open(pdf_path)
+        master_tasks = []
+        
+        total_chapters = sum(len(u['chapters']) for u in structure)
+        completed_chapters = 0
+        
+        with Progress() as progress:
+            task_bar = progress.add_task("[cyan]🏭 Manufacturing Assets...", total=total_chapters)
+            
+            unit_counter = 1
+            for unit in structure:
+                safe_unit = f"{unit_counter:02d}_{unit['unit_name']}"
+                unit_path = os.path.join(output_root, safe_unit)
+                os.makedirs(unit_path, exist_ok=True)
                 
-                sub_upper = subject.upper() # Target Detected: UPSI_HISTORY
-                current_hash = self.get_md5(sub_path)
-
-                # 1. Deduplication Logic (MD5)
-                if self.cache.get(sub_upper) == current_hash:
-                    console.print(f"[yellow]⏩ {sub_upper} Verified (Hash Match). Skipping...[/yellow]")
-                    continue
-
-                # 2. Setup Colorful Live Dashboard
-                table = Table(show_header=True, header_style="bold magenta", expand=True)
-                table.add_column("🚀 Phase", width=25)
-                table.add_column("📊 Status", justify="center")
-                table.add_column("🛰️ Firebase Live", justify="right")
-
-                with Live(table, refresh_per_second=4):
-                    # --- Step 1: Verification ---
-                    table.add_row("Verification", "[yellow]Scanning Files...[/yellow]", "⏳")
-                    files = {f.upper(): f for f in os.listdir(sub_path)}
-                    self.update_remote_monitor(sub_upper, "VERIFYING", 10, "Validating folder structure")
+                chap_counter = 1
+                for chap in unit['chapters']:
+                    safe_chap = f"{chap_counter:02d}_{chap['chapter']}"
+                    chap_full_path = os.path.join(unit_path, safe_chap)
+                    os.makedirs(chap_full_path, exist_ok=True)
                     
-                    if "MASTER_PROMPT.TXT" not in files:
-                        table.add_row("Verification", "[red]Failed (Prompt Missing)[/red]", "❌")
-                        continue
-                    table.add_row("Verification", "[green]Verified ✅[/green]", "📶")
-
-                    # --- Step 2: Skeleton DFS Sync ---
-                    table.add_row("DFS N-ary Tree", "[yellow]Syncing Tree...[/yellow]", "⏳")
-                    self.update_remote_monitor(sub_upper, "SKELETON_SYNC", 40, "Building Firebase DFS Tree")
+                    # Math for ID
+                    real_start = chap['start_p'] + offset
+                    real_end = chap['end_p'] + offset
+                    relative_path = os.path.join(ASSETS_DIR_NAME, safe_unit, safe_chap)
                     
-                    with open(os.path.join(sub_path, files["MASTER_PROMPT.TXT"]), 'r') as f:
-                        prompt = f.read()
+                    image_list = []
                     
-                    syllabus = []
-                    if m_id == 1:
-                        # 🔥 NEW LOGIC: PDF Read karega
-                        pdf_path = os.path.join(sub_path, f"{subject}.PDF")
-                        
-                        if os.path.exists(pdf_path):
-                            # 1. 5-Level Anchoring Call
-                            real_offset = self.get_5_level_offset(pdf_path)
-                            
-                            # 2. Index PDF se Topics Read karna (Simple Version)
-                            index_file = os.path.join(sub_path, "INDEX.pdf")
-                            if os.path.exists(index_file):
-                                doc = fitz.open(index_file)
-                                for page in doc:
-                                    for line in page.get_text().split('\n'):
-                                        if len(line.strip()) > 3:
-                                            # Offset ko har topic ke sath jod rahe hain
-                                            syllabus.append({
-                                                "topic": line.strip(), 
-                                                "chapter": "AUTO", 
-                                                "offset": real_offset
-                                            })
-                            else:
-                                syllabus = [{"topic": "INDEX_PDF_MISSING", "chapter": "ERROR"}]
-                        else:
-                             syllabus = [{"topic": "MAIN_PDF_MISSING", "chapter": "ERROR"}]
-
+                    # --- SMART RESUME CHECK ---
+                    expected_count = (real_end - real_start) + 1
+                    existing_files = [f for f in os.listdir(chap_full_path) if f.endswith('.jpg')]
+                    
+                    if len(existing_files) >= expected_count and expected_count > 0:
+                        # SKIP EXTRACTION (Already Done)
+                        image_list = [f"{i}.jpg" for i in range(1, expected_count + 1)]
                     else:
-                        # Method 2 waisa hi rahega
-                        with open(os.path.join(sub_path, files["SYLLABUS_DB.JSON"]), 'r') as f:
-                            syllabus = json.load(f)
-                    # Firebase Tree Build
-                    ref = db.reference(f'Syllabus/{sub_upper}')
-                    ref.child("Config").update({"prompt": prompt, "hash": current_hash})
-                    self.sync_skeleton_dfs(ref.child("Data"), syllabus)
-                    table.add_row("DFS N-ary Tree", "[green]Natural Sorted 🌳[/green]", "📶")
+                        # DO EXTRACTION
+                        local_img_id = 1
+                        for p_idx in range(real_start - 1, real_end):
+                            if p_idx >= len(doc): break
+                            
+                            page = doc[p_idx]
+                            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2)) # High Quality
+                            
+                            img_filename = f"{local_img_id}.jpg"
+                            pix.save(os.path.join(chap_full_path, img_filename))
+                            
+                            image_list.append(img_filename)
+                            local_img_id += 1
+                    
+                    # Task Entry
+                    master_tasks.append({
+                        "unit_name": unit['unit_name'],
+                        "chapter_name": chap['chapter'],
+                        "folder_path": relative_path,
+                        "images": image_list,
+                        "global_id_start": (real_start * 100) + 1,
+                        "display_num_start": 1,
+                        "mode": "IMAGE_MODE"
+                    })
+                    
+                    chap_counter += 1
+                    completed_chapters += 1
+                    progress.advance(task_bar)
+                    
+                    if completed_chapters % 5 == 0:
+                        pct = int((completed_chapters / total_chapters) * 100)
+                        self.update_remote_monitor(subject_name, "EXTRACTING", pct, f"Processing {chap['chapter']}")
+                
+                unit_counter += 1
+        
+        return master_tasks
 
-                    # --- Step 3: Matrix Splitting ---
-                    table.add_row("Matrix Partitioning", "[yellow]Creating Tasks...[/yellow]", "⏳")
-                    self.update_remote_monitor(sub_upper, "PARTITIONING", 85, "Splitting topics for 3 Workers")
+    # ==========================================
+    # 🚀 MAIN EXECUTION
+    # ==========================================
+
+    def execute(self):
+        console.print(Panel("[bold blue]🤖 AJX SCOUT: ELITE PRODUCER (DUAL MODE)[/bold blue]"))
+        
+        for method_dir in BASE_DIRS:
+            if not os.path.exists(method_dir): continue
+            
+            subjects = natsorted([d for d in os.listdir(method_dir) if os.path.isdir(os.path.join(method_dir, d))])
+            
+            for subject in subjects:
+                console.print(f"\n[bold magenta]🚀 Processing: {subject} ({method_dir})[/bold magenta]")
+                subject_path = os.path.join(method_dir, subject)
+                self.update_remote_monitor(subject, "STARTED", 0, "Initializing")
+                
+                master_tasks = []
+
+                # --- METHOD 1: PDF MODE ---
+                if method_dir == "METHOD_1":
+                    # Auto-Detect Files
+                    pdf_file = None
+                    index_file = None
+                    for f in os.listdir(subject_path):
+                        if f.lower().endswith(".pdf"):
+                            if "index" in f.lower(): index_file = os.path.join(subject_path, f)
+                            else: pdf_file = os.path.join(subject_path, f)
                     
-                    # Ensure syllabus is natural sorted before splitting
-                    sorted_syllabus = natsorted(syllabus, key=lambda x: self.natural_sort_key(str(x.get('topic',''))))
+                    if not pdf_file or not index_file:
+                        console.print(f"[red]❌ Files missing in {subject}[/red]")
+                        continue
                     
-                    chunk = math.ceil(len(sorted_syllabus) / 3)
+                    assets_root = os.path.join(subject_path, ASSETS_DIR_NAME)
+                    
+                    # Parse & Process
+                    structure = self.parse_index_structure(index_file)
+                    if not structure: continue
+                    
+                    first_unit = structure[0]['chapters']
+                    offset = self.calculate_5_level_offset(pdf_file, first_unit[0]) if first_unit else 0
+                    
+                    self.update_remote_monitor(subject, "EXTRACTING", 10, "Smart Extraction Started")
+                    master_tasks = self.extract_and_persist_smart(pdf_file, structure, offset, assets_root, subject)
+
+                # --- METHOD 2: JSON MODE ---
+                elif method_dir == "METHOD_2":
+                    json_path = os.path.join(subject_path, "syllabus.json")
+                    if not os.path.exists(json_path):
+                        console.print(f"[red]❌ syllabus.json missing in {subject}[/red]")
+                        continue
+
+                    self.update_remote_monitor(subject, "READING_JSON", 20, "Parsing Syllabus")
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+
+                    assets_root = os.path.join(subject_path, ASSETS_DIR_NAME)
+                    unit_counter = 1
+                    global_id_counter = 101 # Start ID for JSON Mode
+                    
+                    for unit in data:
+                        safe_unit = f"{unit_counter:02d}_{self.clean_filename(unit['unit_name'])}"
+                        unit_path = os.path.join(assets_root, safe_unit)
+                        os.makedirs(unit_path, exist_ok=True)
+                        
+                        chap_counter = 1
+                        for chap_name in unit['chapters']:
+                            safe_chap = f"{chap_counter:02d}_{self.clean_filename(chap_name)}"
+                            chap_full_path = os.path.join(unit_path, safe_chap)
+                            os.makedirs(chap_full_path, exist_ok=True)
+                            
+                            master_tasks.append({
+                                "unit_name": unit['unit_name'],
+                                "chapter_name": chap_name,
+                                "folder_path": os.path.join(ASSETS_DIR_NAME, safe_unit, safe_chap),
+                                "images": [], # Empty means Text Mode
+                                "global_id_start": global_id_counter,
+                                "display_num_start": 1,
+                                "mode": "TEXT_ONLY"
+                            })
+                            global_id_counter += 100
+                            chap_counter += 1
+                        unit_counter += 1
+                
+                # --- COMMON: SPLIT & SAVE TASKS ---
+                if master_tasks:
+                    chunk_size = math.ceil(len(master_tasks) / 3)
                     for i in range(3):
-                        batch = sorted_syllabus[i*chunk:(i+1)*chunk]
-                        with open(f"WORKER_TASK_{i+1}.JSON", 'w') as f:
-                            json.dump({
-                                "SUBJECT": sub_upper, 
-                                "METHOD": m_id, 
-                                "SOURCE": sub_path, 
-                                "BATCH": batch, 
-                                "MASTER_PROMPT": prompt,
-                                "WORKER_ID": i+1
-                            }, f, indent=4)
+                        batch = master_tasks[i * chunk_size : (i + 1) * chunk_size]
+                        if not batch: continue
+                        
+                        prompt_txt = "Generate MCQs..."
+                        prompt_path = os.path.join(subject_path, "MASTER_PROMPT.txt")
+                        if os.path.exists(prompt_path):
+                            with open(prompt_path, 'r') as f: prompt_txt = f.read()
+                        
+                        final_json = {
+                            "SUBJECT": subject,
+                            "SOURCE_ROOT": subject_path,
+                            "BATCH_DATA": batch,
+                            "MASTER_PROMPT": prompt_txt,
+                            "WORKER_ID": i + 1,
+                            "METHOD_TYPE": method_dir
+                        }
+                        
+                        with open(f"{TASK_FILE_PREFIX}_{i+1}.json", 'w', encoding='utf-8') as f:
+                            json.dump(final_json, f, indent=4)
                     
-                    table.add_row("Matrix Partitioning", "[green]3 Workers Ready 📂[/green]", "📶")
-
-                # Update Cache & Final Status
-                self.cache[sub_upper] = current_hash
-                with open(self.cache_file, 'w') as f: json.dump(self.cache, f)
-                self.update_remote_monitor(sub_upper, "SCOUT_FINISHED", 100, "Ready for Matrix Generation")
-                console.print(Panel(f"[bold green]✅ SCOUT SUCCESS: {sub_upper} IS LIVE[/bold green]"))
+                    self.update_remote_monitor(subject, "SCOUT_COMPLETE", 100, "Tasks Ready")
+                    console.print(f"[green]✅ {method_dir}: Tasks Generated Successfully![/green]")
 
 if __name__ == "__main__":
-    AJXScoutElite().scan()
+    AJXScoutElite().execute()
