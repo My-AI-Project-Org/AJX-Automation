@@ -15,8 +15,6 @@ import firebase_admin
 from firebase_admin import credentials, db
 
 # Initialize Firebase
-# NOTE: Ensure 'FIREBASE_SERVICE_KEY' env variable contains your JSON key content
-# OR replace the try-block with: cred = credentials.Certificate("path/to/key.json")
 if not firebase_admin._apps:
     try:
         key_json = os.environ.get("FIREBASE_SERVICE_KEY")
@@ -27,7 +25,7 @@ if not firebase_admin._apps:
             cred = credentials.Certificate("serviceAccountKey.json") 
             
         firebase_admin.initialize_app(cred, {
-            'databaseURL': os.environ.get("FIREBASE_DB_URL", "https://YOUR-APP-ID.firebaseio.com")
+            'databaseURL': os.environ.get("FIREBASE_DB_URL")
         })
     except Exception as e:
         print(f"⚠️ Firebase Warning: {e} (Running in Offline Mode)")
@@ -41,7 +39,7 @@ TASK_FILE_PREFIX = "WORKER_TASK"
 
 class AJXScoutElite:
     def __init__(self):
-        # Dynamic keywords for Unit detection (Subject agnostic)
+        # Dynamic keywords for Unit detection
         self.unit_keywords = [
             "ANCIENT HISTORY", "MEDIEVAL HISTORY", "MODERN HISTORY",
             "GEOGRAPHY", "POLITY", "ECONOMY", "SCIENCE", "ENVIRONMENT",
@@ -50,10 +48,7 @@ class AJXScoutElite:
         self.monitor_ref = None
 
     def update_remote_monitor(self, subject, status, progress, message):
-        """
-        FIREBASE BRAIN: Real-time status update.
-        Visible in App/Console immediately.
-        """
+        """FIREBASE BRAIN: Real-time status update."""
         try:
             if not self.monitor_ref:
                 self.monitor_ref = db.reference(f'Monitoring/{subject}/Scout')
@@ -65,16 +60,13 @@ class AJXScoutElite:
                 "last_updated": int(time.time() * 1000)
             })
         except:
-            pass # Fail silently if internet issue
+            pass 
 
     def clean_filename(self, name):
-        """
-        Ensures folder names are safe for OS, Firebase, and App sorting.
-        Example: "Unit 1: Stone Age!" -> "Unit_1_Stone_Age"
-        """
+        """Sanitizes folder names."""
         clean = re.sub(r'[^\w\s-]', '', name)
         clean = re.sub(r'[-\s]+', '_', clean).strip()
-        return clean[:50]  # Limit length
+        return clean[:50] 
 
     # ==========================================
     # 🧠 METHOD 1 LOGIC (PDF PARSING)
@@ -88,7 +80,6 @@ class AJXScoutElite:
         for page in doc: full_text += page.get_text() + "\n"
         
         lines = full_text.split('\n')
-        # Regex: 1. Topic Name ... B10-B15
         chapter_pattern = re.compile(r'(\d+)\.\s+(.*?)\s+([B]?\d+\s*-\s*[B]?\d+)')
         
         detected_items = []
@@ -234,7 +225,7 @@ class AJXScoutElite:
     # ==========================================
 
     def execute(self):
-        console.print(Panel("[bold blue]🤖 AJX SCOUT: ELITE PRODUCER (DUAL MODE)[/bold blue]"))
+        console.print(Panel("[bold blue]🤖 AJX SCOUT: ELITE PRODUCER (DUAL MODE + SDUI)[/bold blue]"))
         
         for method_dir in BASE_DIRS:
             if not os.path.exists(method_dir): continue
@@ -246,6 +237,25 @@ class AJXScoutElite:
                 subject_path = os.path.join(method_dir, subject)
                 self.update_remote_monitor(subject, "STARTED", 0, "Initializing")
                 
+                # ==========================================
+                # 🟢 NEW: SERVER DRIVEN UI (SDUI) LOGIC
+                # ==========================================
+                ui_file_path = os.path.join(subject_path, "ui_config.json")
+                if os.path.exists(ui_file_path):
+                    console.print("[cyan]🎨 Found Server Driven UI Config! Syncing...[/cyan]")
+                    try:
+                        with open(ui_file_path, 'r', encoding='utf-8') as f:
+                            ui_data = json.load(f)
+                        
+                        # Direct Upload to Firebase Config Node
+                        db.reference(f'Syllabus/{subject}/Config/UI').set(ui_data)
+                        console.print("[green]✅ UI Config Uploaded to Firebase[/green]")
+                    except Exception as e:
+                        console.print(f"[red]⚠️ UI Config Error: {e}[/red]")
+                else:
+                    console.print("[dim]No ui_config.json found. Using App Defaults.[/dim]")
+
+                # --- CONTINUE WITH SCOUTING ---
                 master_tasks = []
 
                 # --- METHOD 1: PDF MODE ---
