@@ -5,6 +5,8 @@ on:
     paths:
       - 'METHOD_1/**'
       - 'METHOD_2/**'
+      - 'ajx_*.py' # Scripts update hone par bhi chalna chahiye
+      - 'main.yml'
   workflow_dispatch:
 
 jobs:
@@ -23,7 +25,6 @@ jobs:
         with:
           python-version: '3.10'
       
-      # UPDATE: Added PyMuPDF because Scout reads PDF now
       - name: Install Dependencies
         run: pip install rich natsort firebase-admin jq PyMuPDF
 
@@ -34,22 +35,38 @@ jobs:
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: |
           python ajx_scout.py
+          
           # Dynamic Subject Detection Logic
-          SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.json)
-          echo "subject=$SUB_NAME" >> $GITHUB_OUTPUT 
+          # Agar file exist karti hai tabhi read karega
+          if [ -f WORKER_TASK_1.json ]; then
+            SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.json)
+            echo "subject=$SUB_NAME" >> $GITHUB_OUTPUT
+            echo "✅ Detected Subject: $SUB_NAME"
+          else
+            echo "⚠️ No Tasks Generated. Exiting."
+            exit 0 
+          fi
 
-      # DO NOT TOUCH: Upload JSON Tasks
+      # 🔥 CRITICAL FIX: Flatten Assets
+      # Images ko deep folders se nikal kar Root 'EXTRACTED_ASSETS' me lao
+      # Taaki Worker ko seedha 'EXTRACTED_ASSETS/Unit/Chapter' mile
+      - name: Flatten Assets for Handoff
+        run: |
+          mkdir -p FINAL_ASSETS
+          # Find all folders named EXTRACTED_ASSETS and copy their contents to FINAL_ASSETS
+          find . -type d -name "EXTRACTED_ASSETS" -not -path "./FINAL_ASSETS*" -exec cp -r {}/. FINAL_ASSETS/ \;
+          echo "✅ Assets flattened to FINAL_ASSETS folder"
+
       - uses: actions/upload-artifact@v4
         with:
           name: matrix-tasks
           path: WORKER_TASK_*.json
 
-      # ✅ UPDATE: Upload Images (The Bridge)
-      # Scout ne jo images banayi hain, unhe upload karo taaki Worker use kar sake
+      # Upload from the Flattened Folder
       - uses: actions/upload-artifact@v4
         with:
           name: assets-pool
-          path: '**/EXTRACTED_ASSETS/**'
+          path: FINAL_ASSETS/ 
           retention-days: 1
 
   # ==================================================
@@ -58,6 +75,7 @@ jobs:
   # ==================================================
   Matrix-Firing:
     needs: Scout
+    if: needs.Scout.outputs.subject != '' # Sirf tab chalo agar Scout ne kuch banaya ho
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -71,8 +89,9 @@ jobs:
         with:
           name: matrix-tasks
           
-      # ✅ 2. UPDATE: Download Images (The Bridge)
-      # Ab Worker ke paas 'EXTRACTED_ASSETS' folder aa jayega
+      # 2. Download Images (The Bridge)
+      # Hum 'FINAL_ASSETS' artifact ko 'EXTRACTED_ASSETS' folder me download karenge
+      # Isse Worker script ka path logic (os.path.join) match ho jayega
       - uses: actions/download-artifact@v4
         with:
           name: assets-pool
@@ -82,13 +101,13 @@ jobs:
         with:
           python-version: '3.10'
           
-      # UPDATE: Removed PyMuPDF, Added Pillow (For Image Reading)
       - name: Install Dependencies
         run: pip install google-generativeai firebase-admin rich zstandard Pillow
 
       - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
+          # Round Robin Keys Logic (Agar secrets me LIST hai)
           KEYS_VM_1: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_2: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_3: ${{ secrets.GEMINI_API_KEYS_LIST }}
@@ -107,11 +126,11 @@ jobs:
   # ==================================================
   Finalize:
     needs: [Scout, Matrix-Firing]
+    if: always() # Chalo bhale hi ek worker fail ho jaye (Partial Sync is better than No Sync)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       
-      # Merge all worker outputs
       - uses: actions/download-artifact@v4
         with:
           pattern: backup-worker-*
@@ -122,7 +141,6 @@ jobs:
         with:
           python-version: '3.10'
           
-      # UPDATE: Added Google Drive API libraries
       - name: Install Dependencies
         run: pip install rich natsort firebase-admin zstandard google-api-python-client google-auth-httplib2 google-auth-oauthlib
         
