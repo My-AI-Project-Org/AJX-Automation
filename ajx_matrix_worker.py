@@ -159,11 +159,25 @@ class EliteMatrixWorker:
                 current_display_num = task_item.get('display_num_start', 1)
                 
                 for q in data:
-                    q['id'] = current_global_id         # DB Unique Key
-                    q['display_num'] = current_display_num # User Friendly Key
+                    # A. Global ID Math
+                    q['id'] = current_global_id
+                    q['display_num'] = current_display_num
                     
+                    # B. Options Sanitizer (CRITICAL FOR ANDROID LIST CONVERTER)
+                    # If options come as dict {"A": "val"}, convert to list ["val", "val"]
+                    # Or keep as list if already list.
+                    raw_opts = q.get('options', [])
+                    if isinstance(raw_opts, dict):
+                        q['options'] = list(raw_opts.values())
+                    elif isinstance(raw_opts, str):
+                        q['options'] = [raw_opts] # Edge case fallback
+                    elif not isinstance(raw_opts, list):
+                        q['options'] = []
+                    
+                    # Increment
                     current_global_id += 1
                     current_display_num += 1
+                    
                 return data
             
             return None
