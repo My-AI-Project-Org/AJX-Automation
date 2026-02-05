@@ -1,0 +1,123 @@
+**ROLE:** You are a Senior Subject Matter Expert for **UPSI (Sub-Inspector)**.
+**TASK:** Analyze the content density of the provided image and extract between **40 (Minimum) to 60 (Maximum)** HIGH-LEVEL MCQs based on ** {topic_name} **.
+
+**CRITICAL DISTRIBUTION RULES:**
+
+1.  **Rich/Conceptual (50%):** Format: "Which statement is INCORRECT?". Options must be complete sentences.
+    * **EXPLANATION FORMAT:** Must be a **JSON Object** mapping keys "A", "B", "C", "D" to specific reasoning.
+2.  **Direct Factual (10%):** Hard dates/names.
+    * **EXPLANATION FORMAT:** Must be a **JSON Object** mapping keys "A", "B", "C", "D".
+3.  **Assertion-Reason (20%):** Standard A/R logic.
+    * **EXPLANATION FORMAT:** Must be a **Single String** containing 3-4 bullet points acting as a "Mini Lesson" on the topic.
+4.  **Multi-Statement (10%):** "Select code...".
+    * **EXPLANATION FORMAT:** Must be a **Single String** with 3-4 bullet points analyzing the statements (Mini Lesson).
+5.  **Chronology (10%):** Arrange events.
+    * **EXPLANATION FORMAT:** Must be a **Single String** listing the events with dates/details (Mini Lesson).
+
+**STRICT EXCLUSIONS:**
+* NO "Match the Following".
+* NO duplicates.
+
+**OUTPUT FORMAT:**
+Return a STRICT JSON List.
+**IMPORTANT:**
+1.  Start IDs strictly from **{start_id}**.
+2.  **OPTIONS FORMAT:** Must be a **JSON ARRAY (List of Strings)**. The first item implies 'A', second 'B', etc.
+3.  Every MCQ object must include the field **"layout": "DEFAULT"**.
+4.  **ANSWER FORMAT:** Use Uppercase "A", "B", "C", or "D".
+
+**EXAMPLES OF REQUIRED FORMATS:**
+
+**1. RICH / CONCEPTUAL Example (Option-wise Expl):**
+{
+    "id": {start_id},
+    "type": "CONCEPTUAL",
+    "layout": "DEFAULT",
+    "question": "Regarding the Stone Age sites in India, which of the following statements is INCORRECT?",
+    "options": [
+       "Bhimbetka in Madhya Pradesh is famous for its prehistoric rock paintings.",
+       "Robert Bruce Foote discovered the first Palaeolithic tool in India.",
+       "The Neolithic age saw the beginning of agriculture and settled life.",
+       "Evidence of the first domestication of animals was found in the Harappan period."
+    ],
+    "answer": "D",
+    "explanation": {
+         "A": "True. Bhimbetka (MP) is a UNESCO World Heritage site known for Mesolithic rock art.",
+         "B": "True. Foote discovered the Pallavaram handaxe in 1863.",
+         "C": "True. Neolithic revolution introduced farming, pottery, and settled village life.",
+         "D": "INCORRECT. Evidence of animal domestication begins in the **Mesolithic period** (e.g., Bagor), much earlier than Harappan."
+    }
+}
+
+**2. MULTI-STATEMENT Example (Mini-Lesson Expl):**
+{
+    "id": {start_id},
+    "type": "STATEMENT",
+    "layout": "DEFAULT",
+    "question": "Consider the following statements regarding the Morley-Minto Reforms (1909):\n1. It introduced separate electorates for Muslims.\n2. It allowed Indians to join the Viceroy's Executive Council.\n\nWhich of the statements given above is/are correct?",
+    "options": [
+       "1 only", 
+       "2 only", 
+       "Both 1 and 2", 
+       "Neither 1 nor 2"
+    ],
+    "answer": "C",
+    "explanation": "• **Separate Electorates:** The 1909 Act introduced the controversial system where Muslim members were to be elected only by Muslim voters.\n• **Executive Council:** Satyendra Prasanna Sinha became the first Indian to join the Viceroy's Executive Council as a Law Member.\n• **Significance:** While it increased Indian participation, it also sowed the seeds of communalism in Indian politics."
+}
+
+**3. ASSERTION-REASON Example (Mini-Lesson Expl):**
+{
+    "id": {start_id},
+    "type": "ASSERTION_REASON", 
+    "layout": "DEFAULT",
+    "question": "Assertion (A): The Revolt of 1857 failed.\nReason (R): It lacked a unified ideology.",
+    "options": [
+       "Both A and R are true and R is correct explanation of A",
+       "Both A and R are true but R is NOT correct explanation",
+       "A is true but R is false",
+       "A is false but R is true"
+    ],
+    "answer": "A",
+    "explanation": "• **Lack of Unity:** The revolt was sporadic and localized. There was no central leadership coordinating the efforts across India.\n• **No Common Goal:** Different groups fought for different reasons—Nana Saheb for his pension, the Rani of Jhansi for her throne. There was no concept of modern nationalism.\n• **British Superiority:** The British had better resources, modern weapons (Enfield rifles), and the support of the telegraph system."
+}
+
+**4. CHRONOLOGY Example (Mini-Lesson Expl):**
+{
+    "id": {start_id},
+    "type": "CHRONOLOGY",
+    "layout": "DEFAULT",
+    "question": "Arrange these events in chronological order:\n1. Dandi March\n2. Quit India Movement\n3. Simon Commission",
+    "options": [
+       "3 - 1 - 2", 
+       "1 - 2 - 3", 
+       "2 - 1 - 3", 
+       "3 - 2 - 1" 
+    ],
+    "answer": "A",
+    "explanation": "1. **Simon Commission (1928):** A statutory commission set up to review the Government of India Act 1919. It was boycotted because it had no Indian members.\n2. **Dandi March (March 12, 1930):** Gandhi started the Civil Disobedience Movement by breaking the salt law.\n3. **Quit India Movement (August 1942):** Gandhi gave the 'Do or Die' call during WWII demanding an immediate end to British rule."
+}
+
+**5. DIRECT FACTUAL Example (Option-wise Expl):**
+{
+    "id": {start_id},
+    "type": "DIRECT",
+    "layout": "DEFAULT",
+    "question": "Who was the first Governor-General of Bengal appointed under the Regulating Act of 1773?",
+    "options": [
+       "Lord Clive",
+       "Warren Hastings",
+       "Lord Cornwallis",
+       "Lord Wellesley"
+    ],
+    "answer": "B",
+    "explanation": {
+         "A": "Incorrect. Clive was Governor of Bengal (1757-60), not Governor-General.",
+         "B": "Correct. Warren Hastings became the first Governor-General of Bengal in 1774.",
+         "C": "Incorrect. Cornwallis introduced the Permanent Settlement in 1793.",
+         "D": "Incorrect. Wellesley introduced the Subsidiary Alliance in 1798."
+    }
+}
+
+**IMPORTANT:**
+- Output ONLY valid JSON.
+- **Start IDs from {start_id}**.
