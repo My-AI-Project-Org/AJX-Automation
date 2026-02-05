@@ -8,17 +8,25 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ==================================================
+  # 🏭 JOB 1: SCOUT (PRODUCER)
+  # Role: Parse PDF -> Cut Images -> Create Tasks
+  # ==================================================
   Scout:
     runs-on: ubuntu-latest
     outputs:
       subject: ${{ steps.set-sub.outputs.subject }}
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          
+      # UPDATE: Added PyMuPDF because Scout reads PDF now
       - name: Install Dependencies
-        run: pip install rich natsort firebase-admin jq
+        run: pip install rich natsort firebase-admin jq PyMuPDF 
+
       - name: Run Scout
         id: set-sub
         env:
@@ -27,30 +35,57 @@ jobs:
         run: |
           python ajx_scout.py
           # Dynamic Subject Detection Logic
-          SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.JSON)
+          SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.json)
           echo "subject=$SUB_NAME" >> $GITHUB_OUTPUT 
+
+      # DO NOT TOUCH: Upload JSON Tasks
       - uses: actions/upload-artifact@v4
         with:
           name: matrix-tasks
-          path: WORKER_TASK_*.JSON
+          path: WORKER_TASK_*.json
 
+      # ✅ UPDATE: Upload Images (The Bridge)
+      # Scout ne jo images banayi hain, unhe upload karo taaki Worker use kar sake
+      - uses: actions/upload-artifact@v4
+        with:
+          name: assets-pool
+          path: '**/EXTRACTED_ASSETS/**'
+          retention-days: 1
+
+  # ==================================================
+  # ⚡ JOB 2: WORKER MATRIX (CONSUMER)
+  # Role: Read Image/Topic -> Generate AI MCQ -> Sync
+  # ==================================================
   Matrix-Firing:
     needs: Scout
     runs-on: ubuntu-latest
     strategy:
-      fail-fast: false # Ek worker gire toh baaki na rukein
+      fail-fast: false
       matrix:
         worker_id: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
+      
+      # 1. Download Tasks (JSON)
       - uses: actions/download-artifact@v4
         with:
           name: matrix-tasks
+          
+      # ✅ 2. UPDATE: Download Images (The Bridge)
+      # Ab Worker ke paas 'EXTRACTED_ASSETS' folder aa jayega
+      - uses: actions/download-artifact@v4
+        with:
+          name: assets-pool
+          path: EXTRACTED_ASSETS 
+
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          
+      # UPDATE: Removed PyMuPDF, Added Pillow (For Image Reading)
       - name: Install Dependencies
-        run: pip install google-generativeai firebase-admin rich PyMuPDF zstandard
+        run: pip install google-generativeai firebase-admin rich zstandard Pillow
+
       - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
@@ -60,30 +95,39 @@ jobs:
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: python ajx_matrix_worker.py
+        
       - uses: actions/upload-artifact@v4
         with:
           name: backup-worker-${{ matrix.worker_id }}
           path: BACKUP/
 
+  # ==================================================
+  # 🏁 JOB 3: FINALIZE (SUPERVISOR)
+  # Role: Audit IDs -> Create Manifest -> Mark Live
+  # ==================================================
   Finalize:
     needs: [Scout, Matrix-Firing]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
+      # Merge all worker outputs
       - uses: actions/download-artifact@v4
         with:
           pattern: backup-worker-*
           merge-multiple: true
           path: BACKUP/
+          
       - uses: actions/setup-python@v4
         with:
           python-version: '3.10'
+          
       - name: Install Dependencies
         run: pip install rich natsort firebase-admin zstandard
+        
       - name: Final Encoding
         env:
           CURRENT_SUBJECT: ${{ needs.Scout.outputs.subject }}
-          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: python ajx_final_sync.py
