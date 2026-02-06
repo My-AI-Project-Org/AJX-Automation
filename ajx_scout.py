@@ -32,12 +32,20 @@ if not firebase_admin._apps:
         print(f"⚠️ Firebase Warning: {e} (Running in Offline Mode)")
 
 # --- GEMINI SETUP (UPDATED) ---
-GEMINI_KEY = os.environ.get("GEMINI_API_KEYS_LIST")
-if GEMINI_KEY:
-    first_key = GEMINI_KEY.split(',')[0].strip()
-    genai.configure(api_key=first_key)
+# --- GEMINI SETUP (UPDATED) ---
+KEYS_LIST = os.environ.get("GEMINI_API_KEYS_LIST")
+
+if KEYS_LIST:
+    # Comma se split karke pehli key uthao
+    first_key = KEYS_LIST.split(',')[0].strip()
+    
+    if first_key:
+        genai.configure(api_key=first_key)
+        print(f"✅ Gemini Configured with Key ending in ...{first_key[-4:]}")
+    else:
+        print("❌ Error: API Key list was empty after split.")
 else:
-    print("⚠️ WARNING: GEMINI_API_KEY not found. Script will fail for Method 1.")
+    print("⚠️ WARNING: GEMINI_API_KEYS_LIST not found in Env.")
 
 console = Console()
 
