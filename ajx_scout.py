@@ -12,7 +12,7 @@ from rich.progress import Progress
 
 # --- NEW IMPORT FOR AI ---
 import google.generativeai as genai
-
+console = Console()
 # --- FIREBASE SETUP ---
 import firebase_admin
 from firebase_admin import credentials, db
