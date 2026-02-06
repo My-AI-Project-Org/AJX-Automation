@@ -32,22 +32,16 @@ if not firebase_admin._apps:
         print(f"⚠️ Firebase Warning: {e} (Running in Offline Mode)")
 
 # --- GEMINI SETUP (UPDATED) ---
-# --- GEMINI SETUP (UPDATED) ---
-KEYS_LIST = os.environ.get("GEMINI_API_KEYS_LIST")
+# --- GEMINI SETUP (DIRECT DEDICATED KEY) ---
+# Yahan apni 'AIza...' wali key paste kar dena quotes ke andar
+DEDICATED_KEY =  "AIzaSyDmb1hHM0Qn_BKllH0Ev9xVU1EG8k6_53c"
 
-if KEYS_LIST:
-    # Comma se split karke pehli key uthao
-    first_key = KEYS_LIST.split(',')[0].strip()
-    
-    if first_key:
-        genai.configure(api_key=first_key)
-        print(f"✅ Gemini Configured with Key ending in ...{first_key[-4:]}")
-    else:
-        print("❌ Error: API Key list was empty after split.")
-else:
-    print("⚠️ WARNING: GEMINI_API_KEYS_LIST not found in Env.")
+try:
+    genai.configure(api_key=DEDICATED_KEY)
+    console.print(f"[green]✅ Gemini Configured with Dedicated Key ending in ...{DEDICATED_KEY[-4:]}[/green]")
+except Exception as e:
+    console.print(f"[red]❌ Gemini Configuration Error: {e}[/red]")
 
-console = Console()
 
 # --- CONFIGURATION ---
 BASE_DIRS = ["METHOD_1", "METHOD_2"] 
