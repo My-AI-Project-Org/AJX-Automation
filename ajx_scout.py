@@ -34,7 +34,8 @@ if not firebase_admin._apps:
 # --- GEMINI SETUP (UPDATED) ---
 GEMINI_KEY = os.environ.get("GEMINI_API_KEYS_LIST")
 if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
+    first_key = GEMINI_KEY.split(',')[0].strip()
+    genai.configure(api_key=first_key)
 else:
     print("⚠️ WARNING: GEMINI_API_KEY not found. Script will fail for Method 1.")
 
