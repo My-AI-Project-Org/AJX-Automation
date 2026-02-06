@@ -219,6 +219,16 @@ class EliteMatrixWorker:
             unit_folder = "Uncategorized"
             chap_folder = chap_node
 
+        # 👇👇👇 [NEW CODE] START: SAVE JSON FOR DRIVE SYNC 👇👇👇
+        # Ye file 'data.json' banayega taaki Final Sync script isse utha sake
+        try:
+            local_json_path = os.path.join(task_item['folder_path'], "data.json")
+            with open(local_json_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            console.print(f"[red]⚠️ Local JSON Save Error: {e}[/red]")
+        # 👆👆👆 [NEW CODE] END 👆👆👆
+
         # Firebase Update
         ref_path = f"Syllabus/{self.subject}/Data/{unit_folder}/{chap_folder}"
         
