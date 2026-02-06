@@ -1,34 +1,42 @@
 import os
 import json
-import fitz  # PyMuPDF
-import re
-import shutil
-import math
 import time
+import re
+import math
+import shutil
+import fitz  # PyMuPDF
 from natsort import natsorted
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress
 
+# --- NEW IMPORT FOR AI ---
+import google.generativeai as genai
+
 # --- FIREBASE SETUP ---
 import firebase_admin
 from firebase_admin import credentials, db
 
-# Initialize Firebase
 if not firebase_admin._apps:
     try:
         key_json = os.environ.get("FIREBASE_SERVICE_KEY")
         if key_json:
             cred = credentials.Certificate(json.loads(key_json))
         else:
-            # Fallback for local testing
-            cred = credentials.Certificate("serviceAccountKey.json") 
-            
+            cred = credentials.Certificate("serviceAccountKey.json")
+        
         firebase_admin.initialize_app(cred, {
             'databaseURL': os.environ.get("FIREBASE_DB_URL")
         })
     except Exception as e:
         print(f"⚠️ Firebase Warning: {e} (Running in Offline Mode)")
+
+# --- GEMINI SETUP (UPDATED) ---
+GEMINI_KEY = os.environ.get("GEMINI_API_KEYS_LIST")
+if GEMINI_KEY:
+    genai.configure(api_key=GEMINI_KEY)
+else:
+    print("⚠️ WARNING: GEMINI_API_KEY not found. Script will fail for Method 1.")
 
 console = Console()
 
@@ -39,12 +47,6 @@ TASK_FILE_PREFIX = "WORKER_TASK"
 
 class AJXScoutElite:
     def __init__(self):
-        # Dynamic keywords for Unit detection
-        self.unit_keywords = [
-            "ANCIENT HISTORY", "MEDIEVAL HISTORY", "MODERN HISTORY",
-            "GEOGRAPHY", "POLITY", "ECONOMY", "SCIENCE", "ENVIRONMENT",
-            "SECTION", "UNIT", "PART", "KHAND", "GENERAL STUDIES"
-        ]
         self.monitor_ref = None
 
     def update_remote_monitor(self, subject, status, progress, message):
@@ -59,6 +61,8 @@ class AJXScoutElite:
                 "current_task": message,
                 "last_updated": int(time.time() * 1000)
             })
+            # LOGGING
+            console.print(f"[dim]📡 Syncing Status: {status} - {message}[/dim]")
         except:
             pass 
 
@@ -69,83 +73,122 @@ class AJXScoutElite:
         return clean[:50] 
 
     # ==========================================
-    # 🧠 METHOD 1 LOGIC (PDF PARSING)
+    # 🧠 NEW LOGIC: GEMINI FILE UPLOAD + DFS + LOOP
     # ==========================================
 
-    def parse_index_structure(self, index_pdf_path):
-        """DSA: Parsing Index PDF into a Structured N-ary Tree."""
-        console.print(f"[cyan]🔍 Analyzing Index Structure...[/cyan]")
-        doc = fitz.open(index_pdf_path)
-        full_text = ""
-        for page in doc: full_text += page.get_text() + "\n"
-        
-        lines = full_text.split('\n')
-        chapter_pattern = re.compile(r'(\d+)\.\s+(.*?)\s+([B]?\d+\s*-\s*[B]?\d+)')
-        
-        detected_items = []
-        current_unit = "General_Section"
-        
-        for line in lines:
-            line = line.strip()
-            if not line: continue
+    def wait_for_file_active(self, file):
+        """Waits for Google Server to process the PDF."""
+        console.print(f"[yellow]⏳ Waiting for file processing: {file.name}...[/yellow]")
+        while True:
+            file = genai.get_file(file.name)
+            if file.state.name == "ACTIVE":
+                console.print(f"[green]✅ File Ready on Google Server![/green]")
+                return file
+            elif file.state.name == "FAILED":
+                raise Exception("Google File Processing Failed.")
+            time.sleep(2)
+
+    def get_structure_from_gemini(self, index_pdf_path, subject):
+        """
+        REPLACES REGEX: Uploads PDF -> DFS Prompt -> Retry Loop -> Valid JSON
+        """
+        console.print(f"[bold cyan]🔍 STEP 1: Starting Gemini Index Analysis for {subject}...[/bold cyan]")
+        self.update_remote_monitor(subject, "UPLOADING", 5, "Uploading Index to AI")
+
+        try:
+            # 1. Upload
+            uploaded_file = genai.upload_file(path=index_pdf_path, display_name="Index PDF")
+            active_file = self.wait_for_file_active(uploaded_file)
+
+            # 2. Architect Prompt (DFS & Nested Logic)
+            prompt = """
+            Act as a Syllabus Architect. Parse the uploaded Table of Contents PDF.
             
-            # Unit Detection
-            line_upper = line.upper()
-            for kw in self.unit_keywords:
-                if kw in line_upper and len(line) < 60:
-                    current_unit = self.clean_filename(line)
-                    break
+            **CRITICAL RULES:**
+            1. **DFS Hierarchy:** Create a NESTED structure. Unit -> Chapters -> Topics (if indented).
+            2. **Unit Detection:** Detect logical Units (e.g., 'Ancient History') based on bold headers or numbering resets.
+            3. **Clean Numbers:** Convert 'B455' to 455. Remove prefixes.
+            4. **Completeness:** Do not stop until the end of the document.
+
+            **OUTPUT FORMAT (Strict JSON):**
+            [
+              {
+                "unit_name": "Unit Name",
+                "chapters": [
+                  { "chapter": "Chapter Name", "start_p": 10, "end_p": 20 }
+                ]
+              }
+            ]
+            """
+
+            # 3. Multipass Loop
+            model = genai.GenerativeModel("gemini-1.5-flash")
+            attempts = 0
             
-            # Chapter Detection
-            match = chapter_pattern.search(line)
-            if match:
+            while attempts < 3:
+                console.print(f"[yellow]🤖 Gemini Thinking... (Attempt {attempts+1}/3)[/yellow]")
+                self.update_remote_monitor(subject, "ANALYZING", 10, f"AI Attempt {attempts+1}")
+                
                 try:
-                    topic_name = match.group(2).strip()
-                    range_str = match.group(3).strip().replace(" ", "")
-                    numbers = re.findall(r'\d+', range_str)
-                    if len(numbers) >= 2:
-                        detected_items.append({
-                            "unit": current_unit,
-                            "chapter": self.clean_filename(topic_name),
-                            "original_topic": topic_name,
-                            "start_p": int(numbers[0]),
-                            "end_p": int(numbers[1])
-                        })
-                except: continue
+                    response = model.generate_content([active_file, prompt])
+                    
+                    # Clean JSON
+                    raw_text = response.text.replace("```json", "").replace("```", "").strip()
+                    structure = json.loads(raw_text)
 
-        # Grouping
-        detected_items.sort(key=lambda x: x['unit']) 
-        structure = []
-        from itertools import groupby
-        for key, group in groupby(detected_items, key=lambda x: x['unit']):
-            structure.append({"unit_name": key, "chapters": list(group)})
-            
-        return structure
+                    # Validation
+                    if isinstance(structure, list) and len(structure) > 0:
+                        if 'chapters' in structure[0]:
+                            console.print(f"[green]✅ Valid Nested Skeleton Found: {len(structure)} Units[/green]")
+                            return structure
+                        else:
+                            console.print("[red]⚠️ JSON missing 'chapters'. Retrying...[/red]")
+                    else:
+                        console.print("[red]⚠️ Empty JSON. Retrying...[/red]")
 
-    def calculate_5_level_offset(self, main_pdf_path, anchor_chapter):
-        """ALGORITHM: 5-Level Anchoring to find Real Offset."""
-        console.print("[yellow]⚓ Calculating Offset...[/yellow]")
-        doc = fitz.open(main_pdf_path)
-        target_name = anchor_chapter['original_topic'].lower()[:15]
-        target_index_page = anchor_chapter['start_p']
-        detected_page = -1
-        
-        for i in range(min(30, len(doc))):
-            page = doc[i]
-            blocks = page.get_text("blocks")
-            plain_text = page.get_text().lower()
+                except Exception as inner_e:
+                    console.print(f"[red]⚠️ Error in Attempt {attempts+1}: {inner_e}[/red]")
+                
+                attempts += 1
+                time.sleep(2)
             
-            if target_name in plain_text:
-                if len(blocks) > 5: # Content Density Check
+            console.print("[bold red]❌ All Attempts Failed. Could not parse Index.[/bold red]")
+            return None
+
+        except Exception as e:
+            console.print(f"[red]❌ Critical Gemini Error: {e}[/red]")
+            return None
+
+    def calculate_5_level_offset(self, main_pdf_path, structure):
+        """ALGORITHM: Finds difference between Index Page and Real PDF Page."""
+        try:
+            # Anchor from first chapter
+            anchor_chap = structure[0]['chapters'][0]
+            target_name = anchor_chap['chapter'].lower()[:15]
+            target_index_page = anchor_chap['start_p']
+            
+            console.print(f"[yellow]⚓ Calculating Offset... Searching for '{target_name}' (Index says Page {target_index_page})[/yellow]")
+            
+            doc = fitz.open(main_pdf_path)
+            detected_page = -1
+            
+            for i in range(min(50, len(doc))):
+                page = doc[i]
+                if target_name in page.get_text().lower():
                     detected_page = i + 1
                     console.print(f"[green]✅ Anchor Found at PDF Page {detected_page}[/green]")
                     break
-        
-        return (detected_page - target_index_page) if detected_page != -1 else 0
+            
+            if detected_page != -1:
+                return detected_page - target_index_page
+            return 0
+        except:
+            console.print("[red]⚠️ Offset Calculation Failed. Defaulting to 0.[/red]")
+            return 0
 
     def extract_and_persist_smart(self, pdf_path, structure, offset, output_root, subject_name):
         """
-        SMART ENGINE: Extracts Images & Resumes if stopped.
+        SMART ENGINE: Creates Tasks & Extracts Images
         """
         doc = fitz.open(pdf_path)
         master_tasks = []
@@ -158,13 +201,13 @@ class AJXScoutElite:
             
             unit_counter = 1
             for unit in structure:
-                safe_unit = f"{unit_counter:02d}_{unit['unit_name']}"
+                safe_unit = f"{unit_counter:02d}_{self.clean_filename(unit['unit_name'])}"
                 unit_path = os.path.join(output_root, safe_unit)
                 os.makedirs(unit_path, exist_ok=True)
                 
                 chap_counter = 1
                 for chap in unit['chapters']:
-                    safe_chap = f"{chap_counter:02d}_{chap['chapter']}"
+                    safe_chap = f"{chap_counter:02d}_{self.clean_filename(chap['chapter'])}"
                     chap_full_path = os.path.join(unit_path, safe_chap)
                     os.makedirs(chap_full_path, exist_ok=True)
                     
@@ -180,7 +223,6 @@ class AJXScoutElite:
                     existing_files = [f for f in os.listdir(chap_full_path) if f.endswith('.jpg')]
                     
                     if len(existing_files) >= expected_count and expected_count > 0:
-                        # SKIP EXTRACTION (Already Done)
                         image_list = [f"{i}.jpg" for i in range(1, expected_count + 1)]
                     else:
                         # DO EXTRACTION
@@ -225,7 +267,7 @@ class AJXScoutElite:
     # ==========================================
 
     def execute(self):
-        console.print(Panel("[bold blue]🤖 AJX SCOUT: ELITE PRODUCER (DUAL MODE + SDUI)[/bold blue]"))
+        console.print(Panel("[bold blue]🤖 AJX SCOUT: FINAL REPAIRED VERSION (GEMINI + SYNC)[/bold blue]"))
         
         for method_dir in BASE_DIRS:
             if not os.path.exists(method_dir): continue
@@ -237,28 +279,20 @@ class AJXScoutElite:
                 subject_path = os.path.join(method_dir, subject)
                 self.update_remote_monitor(subject, "STARTED", 0, "Initializing")
                 
-                # ==========================================
-                # 🟢 NEW: SERVER DRIVEN UI (SDUI) LOGIC
-                # ==========================================
+                # SDUI Logic (Included)
                 ui_file_path = os.path.join(subject_path, "ui_config.json")
                 if os.path.exists(ui_file_path):
-                    console.print("[cyan]🎨 Found Server Driven UI Config! Syncing...[/cyan]")
                     try:
                         with open(ui_file_path, 'r', encoding='utf-8') as f:
                             ui_data = json.load(f)
-                        
-                        # Direct Upload to Firebase Config Node
                         db.reference(f'Syllabus/{subject}/Config/UI').set(ui_data)
                         console.print("[green]✅ UI Config Uploaded to Firebase[/green]")
                     except Exception as e:
                         console.print(f"[red]⚠️ UI Config Error: {e}[/red]")
-                else:
-                    console.print("[dim]No ui_config.json found. Using App Defaults.[/dim]")
 
-                # --- CONTINUE WITH SCOUTING ---
                 master_tasks = []
 
-                # --- METHOD 1: PDF MODE ---
+                # --- METHOD 1: GEMINI PDF MODE ---
                 if method_dir == "METHOD_1":
                     # Auto-Detect Files
                     pdf_file = None
@@ -274,30 +308,41 @@ class AJXScoutElite:
                     
                     assets_root = os.path.join(subject_path, ASSETS_DIR_NAME)
                     
-                    # Parse & Process
-                    structure = self.parse_index_structure(index_file)
-                    if not structure: continue
+                    # 1. PARSE STRUCTURE (AI + WAIT LOOP)
+                    structure = self.get_structure_from_gemini(index_file, subject)
+                    if not structure: 
+                        console.print("[red]❌ Skipping Subject due to Index Error.[/red]")
+                        continue
                     
-                    first_unit = structure[0]['chapters']
-                    offset = self.calculate_5_level_offset(pdf_file, first_unit[0]) if first_unit else 0
+                    # 🔥 CRITICAL LOGIC: SYNC SKELETON TO FIREBASE
+                    console.print(f"[bold green]☁️ Syncing Skeleton to Firebase: Syllabus/{subject}/Structure...[/bold green]")
+                    db.reference(f'Syllabus/{subject}/Structure').set(structure)
+                    self.update_remote_monitor(subject, "SYNCED", 10, "Skeleton Uploaded")
+
+                    # 2. Offset & Extraction
+                    offset = self.calculate_5_level_offset(pdf_file, structure)
                     
-                    self.update_remote_monitor(subject, "EXTRACTING", 10, "Smart Extraction Started")
+                    self.update_remote_monitor(subject, "EXTRACTING", 15, "Assets Manufacturing")
                     master_tasks = self.extract_and_persist_smart(pdf_file, structure, offset, assets_root, subject)
 
                 # --- METHOD 2: JSON MODE ---
                 elif method_dir == "METHOD_2":
                     json_path = os.path.join(subject_path, "syllabus.json")
                     if not os.path.exists(json_path):
-                        console.print(f"[red]❌ syllabus.json missing in {subject}[/red]")
+                        console.print(f"[red]❌ syllabus.json missing[/red]")
                         continue
 
                     self.update_remote_monitor(subject, "READING_JSON", 20, "Parsing Syllabus")
                     with open(json_path, 'r', encoding='utf-8') as f:
                         data = json.load(f)
 
+                    # 🔥 SYNC SKELETON
+                    db.reference(f'Syllabus/{subject}/Structure').set(data)
+                    console.print(f"[green]☁️ Skeleton Synced to Firebase[/green]")
+
                     assets_root = os.path.join(subject_path, ASSETS_DIR_NAME)
                     unit_counter = 1
-                    global_id_counter = 101 # Start ID for JSON Mode
+                    global_id_counter = 101 
                     
                     for unit in data:
                         safe_unit = f"{unit_counter:02d}_{self.clean_filename(unit['unit_name'])}"
@@ -314,7 +359,7 @@ class AJXScoutElite:
                                 "unit_name": unit['unit_name'],
                                 "chapter_name": chap_name,
                                 "folder_path": os.path.join(ASSETS_DIR_NAME, safe_unit, safe_chap),
-                                "images": [], # Empty means Text Mode
+                                "images": [],
                                 "global_id_start": global_id_counter,
                                 "display_num_start": 1,
                                 "mode": "TEXT_ONLY"
@@ -348,7 +393,7 @@ class AJXScoutElite:
                             json.dump(final_json, f, indent=4)
                     
                     self.update_remote_monitor(subject, "SCOUT_COMPLETE", 100, "Tasks Ready")
-                    console.print(f"[green]✅ {method_dir}: Tasks Generated Successfully![/green]")
+                    console.print(f"[green]✅ {method_dir}: Tasks Generated & Saved![/green]")
 
 if __name__ == "__main__":
     AJXScoutElite().execute()
