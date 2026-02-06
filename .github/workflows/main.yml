@@ -5,16 +5,16 @@ on:
     paths:
       - 'METHOD_1/**'
       - 'METHOD_2/**'
-      - 'ajx_*.py' # Scripts update hone par bhi chalna chahiye
+      - 'ajx_*.py'
       - 'main.yml'
   workflow_dispatch:
 
 jobs:
   # ==================================================
   # 🏭 JOB 1: SCOUT (PRODUCER)
-  # Role: Parse PDF -> Cut Images -> Create Tasks
   # ==================================================
   Scout:
+    # ... (Pura code same - UNTOUCHED) ...
     runs-on: ubuntu-latest
     outputs:
       subject: ${{ steps.set-sub.outputs.subject }}
@@ -33,11 +33,9 @@ jobs:
         env:
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }} # <-- (UNTOUCHED: Add this if missing)
         run: |
           python ajx_scout.py
-          
-          # Dynamic Subject Detection Logic
-          # Agar file exist karti hai tabhi read karega
           if [ -f WORKER_TASK_1.json ]; then
             SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.json)
             echo "subject=$SUB_NAME" >> $GITHUB_OUTPUT
@@ -47,22 +45,17 @@ jobs:
             exit 0 
           fi
 
-      # 🔥 CRITICAL FIX: Flatten Assets
-      # Images ko deep folders se nikal kar Root 'EXTRACTED_ASSETS' me lao
-      # Taaki Worker ko seedha 'EXTRACTED_ASSETS/Unit/Chapter' mile
       - name: Flatten Assets for Handoff
         run: |
           mkdir -p FINAL_ASSETS
-          # Find all folders named EXTRACTED_ASSETS and copy their contents to FINAL_ASSETS
           find . -type d -name "EXTRACTED_ASSETS" -not -path "./FINAL_ASSETS*" -exec cp -r {}/. FINAL_ASSETS/ \;
-          echo "✅ Assets flattened to FINAL_ASSETS folder"
+          echo "✅ Assets flattened"
 
       - uses: actions/upload-artifact@v4
         with:
           name: matrix-tasks
           path: WORKER_TASK_*.json
 
-      # Upload from the Flattened Folder
       - uses: actions/upload-artifact@v4
         with:
           name: assets-pool
@@ -71,11 +64,10 @@ jobs:
 
   # ==================================================
   # ⚡ JOB 2: WORKER MATRIX (CONSUMER)
-  # Role: Read Image/Topic -> Generate AI MCQ -> Sync
   # ==================================================
   Matrix-Firing:
     needs: Scout
-    if: needs.Scout.outputs.subject != '' # Sirf tab chalo agar Scout ne kuch banaya ho
+    if: needs.Scout.outputs.subject != ''
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -84,14 +76,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      # 1. Download Tasks (JSON)
       - uses: actions/download-artifact@v4
         with:
           name: matrix-tasks
           
-      # 2. Download Images (The Bridge)
-      # Hum 'FINAL_ASSETS' artifact ko 'EXTRACTED_ASSETS' folder me download karenge
-      # Isse Worker script ka path logic (os.path.join) match ho jayega
       - uses: actions/download-artifact@v4
         with:
           name: assets-pool
@@ -107,14 +95,28 @@ jobs:
       - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
-          # Round Robin Keys Logic (Agar secrets me LIST hai)
           KEYS_VM_1: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_2: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_3: ${{ secrets.GEMINI_API_KEYS_LIST }}
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: python ajx_matrix_worker.py
-        
+
+      # 🔥🔥🔥 CHANGE START: CREATE BACKUP STRUCTURE 🔥🔥🔥
+      # Worker ne data.json 'EXTRACTED_ASSETS' me banaya hai.
+      # Hame usse 'BACKUP/SubjectName' me move karna hai taaki Job 3 usse utha sake.
+      - name: Organize Backup for Handoff
+        run: |
+          SUBJECT_NAME="${{ needs.Scout.outputs.subject }}"
+          mkdir -p BACKUP/$SUBJECT_NAME
+          
+          # Copy everything from EXTRACTED_ASSETS to BACKUP/SubjectName
+          # This copies the generated data.json files along with folder structure
+          cp -r EXTRACTED_ASSETS/* BACKUP/$SUBJECT_NAME/
+          
+          echo "✅ Data moved to BACKUP/$SUBJECT_NAME for Final Sync"
+      # 🔥🔥🔥 CHANGE END 🔥🔥🔥
+
       - uses: actions/upload-artifact@v4
         with:
           name: backup-worker-${{ matrix.worker_id }}
@@ -122,11 +124,10 @@ jobs:
 
   # ==================================================
   # 🏁 JOB 3: FINALIZE (SUPERVISOR)
-  # Role: Audit IDs -> Create Manifest -> Mark Live -> Drive Sync
   # ==================================================
   Finalize:
     needs: [Scout, Matrix-Firing]
-    if: always() # Chalo bhale hi ek worker fail ho jaye (Partial Sync is better than No Sync)
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -150,4 +151,4 @@ jobs:
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
-        run: python ajx_final_sync.py
+        run: python ajx_final_sync.py # (UNTOUCHED: Make sure script name matches your repo)
