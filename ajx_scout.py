@@ -125,7 +125,7 @@ class AJXScoutElite:
             """
 
             # 3. Multipass Loop
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             attempts = 0
             
             while attempts < 3:
