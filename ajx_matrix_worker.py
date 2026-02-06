@@ -42,10 +42,16 @@ class EliteMatrixWorker:
         self.method_type = self.task_data.get('METHOD_TYPE', 'METHOD_1')
         
         # Load Keys from Env (Comma Separated)
-        self.keys = os.getenv(f"KEYS_VM_{self.worker_id}", "").split(",")
-        if not self.keys or self.keys == [""]:
-            console.print("[red]❌ No API Keys found in Environment![/red]")
+        raw_keys = os.getenv(f"KEYS_VM_{self.worker_id}", "")
+        
+        # 👇👇 MAGIC FIX: .strip() lagaya hai jo space/newline uda dega 👇👇
+        self.keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
+        
+        if not self.keys:
+            console.print(f"[red]❌ No Valid API Keys found for Worker {self.worker_id}![/red]")
             exit()
+        
+        console.print(f"[green]✅ Loaded {len(self.keys)} Keys (Sanitized)[/green]")
 
         self.compressor = zstd.ZstdCompressor(level=3)
         
