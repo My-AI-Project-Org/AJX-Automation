@@ -150,6 +150,9 @@ class EliteMatrixWorker:
                 img_objects = []
                 for img_file in images:
                     img_path = os.path.join(task_item['folder_path'], img_file)
+                    # 👇 DEBUG LINE ADD KARO
+                    if not os.path.exists(image_path):
+                        print(f"❌ MISSING: {image_path} (Worker is looking here but file is gone!)")
                     if os.path.exists(img_path):
                         img_objects.append(PIL.Image.open(img_path))
                 
