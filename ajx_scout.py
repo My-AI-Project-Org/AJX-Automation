@@ -75,14 +75,13 @@ class AJXScoutElite:
         clean = re.sub(r'[-\s]+', '_', clean).strip()
         return clean[:50] 
 
-    # 👇 NEW HELPER FUNCTION
-    def is_chapter_completed(self, unit_name, chapter_name):
-        """Checks Firebase to see if this chapter is already fully processed."""
+    
+    def is_chapter_completed(self, subject_name, unit_name, chapter_name):
         try:
-            # Path: Syllabus/{Subject}/Data/{Unit}/{Chapter}/status
-            ref_path = f"Syllabus/{self.subject_name}/Data/{unit_name}/{chapter_name}/status"
+        # 👇 Ab ye pass kiye hue variable ko use karega
+            ref_path = f"Syllabus/{subject_name}/Data/{unit_name}/{chapter_name}/status"
             status = db.reference(ref_path).get()
-            
+        
             if status == "COMPLETED":
                 return True
             return False
@@ -234,7 +233,8 @@ class AJXScoutElite:
 
                     # 🔥🔥🔥 SMART FIREBASE CHECK STARTS HERE 🔥🔥🔥
                     # Check karo ki kya ye chapter pehle hi ban chuka hai?
-                    if self.is_chapter_completed(unit['unit_name'], chap['chapter']):
+                    # 👇 Yahan subject_name add kar diya bracket ke andar
+                    if self.is_chapter_completed(subject_name, unit['unit_name'], chap['chapter']):
                         console.print(f"[dim]⏩ Skipping {chap['chapter']} (Already COMPLETED in Cloud)[/dim]")
                         
                         # ⚠️ CRITICAL: Bhale hi skip kar rahe ho, Cursor aage badhana padega!
