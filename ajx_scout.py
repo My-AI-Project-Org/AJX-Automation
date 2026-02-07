@@ -191,13 +191,16 @@ class AJXScoutElite:
 
     def extract_and_persist_smart(self, pdf_path, structure, offset, output_root, subject_name):
         """
-        SMART ENGINE: Creates Tasks & Extracts Images
+        SMART ENGINE: Creates Tasks & Extracts Images using SEQUENTIAL COUNTING (Clean PDF Mode)
         """
         doc = fitz.open(pdf_path)
         master_tasks = []
         
         total_chapters = sum(len(u['chapters']) for u in structure)
         completed_chapters = 0
+        
+        # 👇👇👇 NEW LOGIC: Start at Page 1 of Clean PDF 👇👇👇
+        current_cursor = 1 
         
         with Progress() as progress:
             task_bar = progress.add_task("[cyan]🏭 Manufacturing Assets...", total=total_chapters)
@@ -214,9 +217,17 @@ class AJXScoutElite:
                     chap_full_path = os.path.join(unit_path, safe_chap)
                     os.makedirs(chap_full_path, exist_ok=True)
                     
-                    # Math for ID
-                    real_start = chap['start_p'] + offset
-                    real_end = chap['end_p'] + offset
+                    # 👇👇👇 CRITICAL MATH CHANGE 👇👇👇
+                    # Index se sirf LENGTH (Count) nikalo
+                    page_count = (chap['end_p'] - chap['start_p']) + 1
+                    
+                    # Clean PDF se utna hissa kaat lo (Sequence mein)
+                    real_start = current_cursor
+                    real_end = current_cursor + page_count - 1
+                    
+                    # Cursor ko aage badhao agle chapter ke liye
+                    current_cursor = real_end + 1
+                    # 👆👆👆 LOGIC END 👆👆👆
                     relative_path = os.path.join(ASSETS_DIR_NAME, safe_unit, safe_chap)
                     
                     image_list = []
@@ -322,11 +333,11 @@ class AJXScoutElite:
                     db.reference(f'Syllabus/{subject}/Structure').set(structure)
                     self.update_remote_monitor(subject, "SYNCED", 10, "Skeleton Uploaded")
 
-                    # 2. Offset & Extraction
-                    offset = self.calculate_5_level_offset(pdf_file, structure)
-                    
+                    console.print("[bold yellow]🚀 SEQUENTIAL MODE: Assuming Clean PDF (Chapter 1 = Page 1)[/bold yellow]")
                     self.update_remote_monitor(subject, "EXTRACTING", 15, "Assets Manufacturing")
-                    master_tasks = self.extract_and_persist_smart(pdf_file, structure, offset, assets_root, subject)
+                    
+                    # Hum '0' pass kar rahe hain offset mein kyunki ab function khud Counting karega
+                    master_tasks = self.extract_and_persist_smart(pdf_file, structure, 0, assets_root, subject)
 
                 # --- METHOD 2: JSON MODE ---
                 elif method_dir == "METHOD_2":
