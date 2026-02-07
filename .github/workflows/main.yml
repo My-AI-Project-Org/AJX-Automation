@@ -6,7 +6,7 @@ on:
       - 'METHOD_1/**'
       - 'METHOD_2/**'
       - 'ajx_*.py'
-      - 'main.yml'
+      - '.github/workflows/main.yml'
   workflow_dispatch:
 
 jobs:
@@ -14,10 +14,10 @@ jobs:
   # 🏭 JOB 1: SCOUT (PRODUCER)
   # ==================================================
   Scout:
-    # ... (Pura code same - UNTOUCHED) ...
     runs-on: ubuntu-latest
     outputs:
       subject: ${{ steps.set-sub.outputs.subject }}
+    
     steps:
       - uses: actions/checkout@v4
       
@@ -33,23 +33,33 @@ jobs:
         env:
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
-          
         run: |
+          # Scout ab fixed hai (Clean PDF Mode)
           python ajx_scout.py
+          
           if [ -f WORKER_TASK_1.json ]; then
             SUB_NAME=$(jq -r .SUBJECT WORKER_TASK_1.json)
             echo "subject=$SUB_NAME" >> $GITHUB_OUTPUT
             echo "✅ Detected Subject: $SUB_NAME"
           else
             echo "⚠️ No Tasks Generated. Exiting."
-            exit 0 
+            exit 1 
           fi
 
       - name: Flatten Assets for Handoff
         run: |
           mkdir -p FINAL_ASSETS
+          # Dhoondho kahan hai maal
           find . -type d -name "EXTRACTED_ASSETS" -not -path "./FINAL_ASSETS*" -exec cp -r {}/. FINAL_ASSETS/ \;
-          echo "✅ Assets flattened"
+          
+          # Verification
+          echo "📂 Assets Content:"
+          ls -R FINAL_ASSETS | head -n 20
+          
+          if [ -z "$(ls -A FINAL_ASSETS)" ]; then
+             echo "❌ CRITICAL: No Assets Found in FINAL_ASSETS!"
+             exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -73,6 +83,7 @@ jobs:
       fail-fast: false
       matrix:
         worker_id: [1, 2, 3]
+    
     steps:
       - uses: actions/checkout@v4
       
@@ -95,6 +106,7 @@ jobs:
       - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
+          # Teeno keys same hain (Dedicated)
           KEYS_VM_1: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_2: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_3: ${{ secrets.GEMINI_API_KEYS_LIST }}
@@ -102,21 +114,20 @@ jobs:
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
         run: python ajx_matrix_worker.py
 
-      # 🔥🔥🔥 CHANGE START: CREATE BACKUP STRUCTURE 🔥🔥🔥
-      # Worker ne data.json 'EXTRACTED_ASSETS' me banaya hai.
-      # Hame usse 'BACKUP/SubjectName' me move karna hai taaki Job 3 usse utha sake.
       - name: Organize Backup for Handoff
+        env:
+          SUBJECT_NAME: ${{ needs.Scout.outputs.subject }}
         run: |
-          SUBJECT_NAME="${{ needs.Scout.outputs.subject }}"
           mkdir -p BACKUP/$SUBJECT_NAME
           
-          # Copy everything from EXTRACTED_ASSETS to BACKUP/SubjectName
-          # This copies the generated data.json files along with folder structure
-          cp -r EXTRACTED_ASSETS/* BACKUP/$SUBJECT_NAME/
+          echo "📦 Moving processed data for Subject: $SUBJECT_NAME"
+          # Copy Data.json and Folder Structure
+          if [ -d "EXTRACTED_ASSETS" ]; then
+            cp -r EXTRACTED_ASSETS/* BACKUP/$SUBJECT_NAME/
+          else
+            echo "⚠️ Warning: EXTRACTED_ASSETS not found!"
+          fi
           
-          echo "✅ Data moved to BACKUP/$SUBJECT_NAME for Final Sync"
-      # 🔥🔥🔥 CHANGE END 🔥🔥🔥
-
       - uses: actions/upload-artifact@v4
         with:
           name: backup-worker-${{ matrix.worker_id }}
@@ -148,7 +159,8 @@ jobs:
       - name: Final Encoding
         env:
           CURRENT_SUBJECT: ${{ needs.Scout.outputs.subject }}
+          # Make sure secrets match your Repo Settings
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
-        run: python ajx_final_sync.py # (UNTOUCHED: Make sure script name matches your repo)
+        run: python ajx_final_sync.py
