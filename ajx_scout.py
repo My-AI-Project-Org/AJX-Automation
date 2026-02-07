@@ -75,6 +75,21 @@ class AJXScoutElite:
         clean = re.sub(r'[-\s]+', '_', clean).strip()
         return clean[:50] 
 
+    # 👇 NEW HELPER FUNCTION
+    def is_chapter_completed(self, unit_name, chapter_name):
+        """Checks Firebase to see if this chapter is already fully processed."""
+        try:
+            # Path: Syllabus/{Subject}/Data/{Unit}/{Chapter}/status
+            ref_path = f"Syllabus/{self.subject_name}/Data/{unit_name}/{chapter_name}/status"
+            status = db.reference(ref_path).get()
+            
+            if status == "COMPLETED":
+                return True
+            return False
+        except Exception as e:
+            console.print(f"[yellow]⚠️ Could not check status for {chapter_name}: {e}[/yellow]")
+            return False
+
     # ==========================================
     # 🧠 NEW LOGIC: GEMINI FILE UPLOAD + DFS + LOOP
     # ==========================================
@@ -215,11 +230,26 @@ class AJXScoutElite:
                 for chap in unit['chapters']:
                     safe_chap = f"{chap_counter:02d}_{self.clean_filename(chap['chapter'])}"
                     chap_full_path = os.path.join(unit_path, safe_chap)
+                    page_count = (chap['end_p'] - chap['start_p']) + 1
+
+                    # 🔥🔥🔥 SMART FIREBASE CHECK STARTS HERE 🔥🔥🔥
+                    # Check karo ki kya ye chapter pehle hi ban chuka hai?
+                    if self.is_chapter_completed(unit['unit_name'], chap['chapter']):
+                        console.print(f"[dim]⏩ Skipping {chap['chapter']} (Already COMPLETED in Cloud)[/dim]")
+                        
+                        # ⚠️ CRITICAL: Bhale hi skip kar rahe ho, Cursor aage badhana padega!
+                        # Warna agla chapter Page 1 se shuru ho jayega jo GALAT hoga.
+                        current_cursor += page_count
+                        
+                        chap_counter += 1
+                        completed_chapters += 1
+                        progress.advance(task_bar)
+                        continue # 🚀 Loop yahi rok do, aage mat jao
+                    # 🔥🔥🔥 SMART CHECK ENDS 🔥🔥🔥
+                    
                     os.makedirs(chap_full_path, exist_ok=True)
                     
-                    # 👇👇👇 CRITICAL MATH CHANGE 👇👇👇
-                    # Index se sirf LENGTH (Count) nikalo
-                    page_count = (chap['end_p'] - chap['start_p']) + 1
+                    
                     
                     # Clean PDF se utna hissa kaat lo (Sequence mein)
                     real_start = current_cursor
@@ -273,6 +303,8 @@ class AJXScoutElite:
                         self.update_remote_monitor(subject_name, "EXTRACTING", pct, f"Processing {chap['chapter']}")
                 
                 unit_counter += 1
+                console.print(f"[green]📡 Registering {subject_name} in Global Index...[/green]")
+                db.reference(f"Index/Subjects/{subject_name}").set(True)
         
         return master_tasks
 
