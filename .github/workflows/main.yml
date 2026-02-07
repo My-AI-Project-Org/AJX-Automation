@@ -62,6 +62,20 @@ jobs:
              exit 1
           fi
 
+      # 👇👇👇 YE DEBUG STEP ADD KARO 👇👇👇
+      - name: 🕵️ DEBUG - Show Me The Files!
+        run: |
+          echo "📂 Checking EXTRACTED_ASSETS folder..."
+          if [ -d "EXTRACTED_ASSETS" ]; then
+            echo "✅ Folder Exists! Listing contents:"
+            ls -R EXTRACTED_ASSETS
+          else
+            echo "❌ ERROR: EXTRACTED_ASSETS folder not found!"
+          fi
+          
+          echo "📂 Checking FINAL_ASSETS folder (Ready for Upload):"
+          ls -R FINAL_ASSETS    
+
       - uses: actions/upload-artifact@v4
         with:
           name: matrix-tasks
