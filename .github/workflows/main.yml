@@ -49,12 +49,13 @@ jobs:
       - name: Flatten Assets for Handoff
         run: |
           mkdir -p FINAL_ASSETS
-          # Dhoondho kahan hai maal
-          find . -type d -name "EXTRACTED_ASSETS" -not -path "./FINAL_ASSETS*" -exec cp -r {}/. FINAL_ASSETS/ \;
+          # "EXTRACTED_ASSETS" folder ko dhoondh ke FINAL_ASSETS me copy karo
+          # Taaki Artifact structure clean rahe
+          find . -type d -name "EXTRACTED_ASSETS" -not -path "./FINAL_ASSETS*" -exec cp -r {}/. FINAL_ASSETS/EXTRACTED_ASSETS/ \;
           
           # Verification
-          echo "📂 Assets Content:"
-          ls -R FINAL_ASSETS | head -n 20
+          echo "📂 Assets Content inside FINAL_ASSETS:"
+          ls -R FINAL_ASSETS
           
           if [ -z "$(ls -A FINAL_ASSETS)" ]; then
              echo "❌ CRITICAL: No Assets Found in FINAL_ASSETS!"
@@ -87,14 +88,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      # 👇 FIX 1: Tasks ko Root folder (.) me download karo
       - uses: actions/download-artifact@v4
         with:
           name: matrix-tasks
+          path: .
           
+      # 👇 FIX 2: Assets ko bhi Root folder me download karo (path: .)
+      # Pehle ye 'path: EXTRACTED_ASSETS' tha, jisse nested folder ban rha tha
       - uses: actions/download-artifact@v4
         with:
           name: assets-pool
-          path: EXTRACTED_ASSETS 
+          path: . 
+
+      # Debugging Step: Check karo files sahi jagah aayi ya nahi
+      - name: Debug - Check Files
+        run: |
+          echo "📂 Current Directory Structure:"
+          ls -R
+          echo "--------------------------------"
 
       - uses: actions/setup-python@v4
         with:
@@ -106,7 +118,7 @@ jobs:
       - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
-          # Teeno keys same hain (Dedicated)
+          # Abhi hum Same Key List use kar rahe hain teeno ke liye
           KEYS_VM_1: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_2: ${{ secrets.GEMINI_API_KEYS_LIST }}
           KEYS_VM_3: ${{ secrets.GEMINI_API_KEYS_LIST }}
@@ -121,11 +133,12 @@ jobs:
           mkdir -p BACKUP/$SUBJECT_NAME
           
           echo "📦 Moving processed data for Subject: $SUBJECT_NAME"
-          # Copy Data.json and Folder Structure
+          
+          # Check agar EXTRACTED_ASSETS exist karta hai
           if [ -d "EXTRACTED_ASSETS" ]; then
             cp -r EXTRACTED_ASSETS/* BACKUP/$SUBJECT_NAME/
           else
-            echo "⚠️ Warning: EXTRACTED_ASSETS not found!"
+            echo "⚠️ Warning: EXTRACTED_ASSETS not found! Worker might have failed or found nothing."
           fi
           
       - uses: actions/upload-artifact@v4
@@ -159,7 +172,6 @@ jobs:
       - name: Final Encoding
         env:
           CURRENT_SUBJECT: ${{ needs.Scout.outputs.subject }}
-          # Make sure secrets match your Repo Settings
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
