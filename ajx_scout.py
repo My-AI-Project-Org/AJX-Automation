@@ -77,15 +77,23 @@ class AJXScoutElite:
 
     
     def is_chapter_completed(self, subject_name, unit_name, chapter_name):
+        """Checks Firebase to see if this chapter is already fully processed."""
         try:
-        # 👇 Ab ye pass kiye hue variable ko use karega
-            ref_path = f"Syllabus/{subject_name}/Data/{unit_name}/{chapter_name}/status"
+            # 🔥 CRITICAL FIX: Sanitize names for Firebase Keys (Remove dots/illegal chars)
+            # Hum clean_filename use karenge jo pehle se special chars hata deta hai
+            safe_unit = self.clean_filename(unit_name)
+            safe_chap = self.clean_filename(chapter_name)
+
+            # Ab path "Clean" banega (e.g., "01_Ancient_History" instead of "I. Ancient...")
+            ref_path = f"Syllabus/{subject_name}/Data/{safe_unit}/{safe_chap}/status"
+            
             status = db.reference(ref_path).get()
-        
+            
             if status == "COMPLETED":
                 return True
             return False
         except Exception as e:
+            # Yellow warning dikhayega par rukega nahi
             console.print(f"[yellow]⚠️ Could not check status for {chapter_name}: {e}[/yellow]")
             return False
 
