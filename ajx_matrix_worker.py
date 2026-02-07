@@ -118,8 +118,17 @@ class EliteMatrixWorker:
         # 1. PREPARE PROMPT (Inject Formatting Rules)
         base_prompt = self.task_data.get('MASTER_PROMPT', 'Generate MCQs')
         
-        # Add ID Instructions (Crucial for Display)
-        # We ask LLM to start from 1, we will map Global ID later in Python
+        # 👇👇👇 FIX START: PROMPT VARIABLES REPLACE KARO 👇👇👇
+        # Prompt me jo {start_id} aur {topic_name} hai, usko actual data se badal do
+        # Nahi to Gemini "id": {start_id} print kar dega jo Invalid JSON hai.
+        
+        start_num = task_item.get('display_num_start', 1)
+        topic_name = task_item['chapter_name']
+        
+        # String Replacement
+        base_prompt = base_prompt.replace("{start_id}", str(start_num))
+        base_prompt = base_prompt.replace("{topic_name}", topic_name)
+        # 👆👆👆 FIX END 👆👆👆
         prompt_instructions = (
             f"\n\nContext Topic: {task_item['chapter_name']}\n"
             f"IMPORTANT: Output pure JSON list of objects. "
