@@ -129,6 +129,39 @@ jobs:
       - name: Install Dependencies
         run: pip install google-generativeai firebase-admin rich zstandard Pillow
 
+        # 👇👇👇 YE FORCE FIX ADD KARO (Worker ko folder dene ke liye) 👇👇👇
+      - name: 🚑 EMERGENCY FIX - Locate & Move Assets
+        run: |
+          echo "🔍 Searching for EXTRACTED_ASSETS..."
+          
+          # Case 1: Agar wo FINAL_ASSETS ke andar chupa hai
+          if [ -d "FINAL_ASSETS/EXTRACTED_ASSETS" ]; then
+            echo "✅ Found inside FINAL_ASSETS! Moving to Root..."
+            mv FINAL_ASSETS/EXTRACTED_ASSETS .
+          
+          # Case 2: Agar wo assets-pool ke andar chupa hai
+          elif [ -d "assets-pool/EXTRACTED_ASSETS" ]; then
+             echo "✅ Found inside assets-pool! Moving to Root..."
+             mv assets-pool/EXTRACTED_ASSETS .
+          
+          # Case 3: Agar wo pehle se yahin hai par nested hai
+          elif [ -d "EXTRACTED_ASSETS/EXTRACTED_ASSETS" ]; then
+             echo "✅ Found double nested folder! Fixing..."
+             mv EXTRACTED_ASSETS/EXTRACTED_ASSETS/* EXTRACTED_ASSETS/
+             rm -rf EXTRACTED_ASSETS/EXTRACTED_ASSETS
+          fi
+          
+          # Final Verification
+          if [ -d "EXTRACTED_ASSETS" ]; then
+            echo "🎉 SUCCESS: EXTRACTED_ASSETS is ready!"
+            ls -F EXTRACTED_ASSETS | head -n 5
+          else
+            echo "❌ CRITICAL: Folder abhi bhi nahi mila! Worker fail hoga."
+            find . -maxdepth 3 -type d
+            exit 1
+          fi
+      # 👆👆👆 YAHAN KHATAM 👆👆👆
+
       - name: Start Matrix Engine
         env:
           WORKER_ID: ${{ matrix.worker_id }}
