@@ -18,7 +18,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 # ==========================================
 
 # 🔴 PASTE YOUR DRIVE FOLDER ID HERE
-DRIVE_ROOT_ID = "https://drive.google.com/drive/u/1/folders/1i_YALAikZVwKmSlor6QgF5dm-0hhMxSw" 
+DRIVE_ROOT_ID = "1i_YALAikZVwKmSlor6QgF5dm-0hhMxSw" 
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
