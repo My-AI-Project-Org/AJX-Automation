@@ -17,8 +17,12 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 # ⚙️ CONFIGURATION & SECRETS SETUP
 # ==========================================
 
-# 🔴 PASTE YOUR DRIVE FOLDER ID HERE
-DRIVE_ROOT_ID = "1i_YALAikZVwKmSlor6QgF5dm-0hhMxSw" 
+# 🔴 1. GOOGLE DRIVE ROOT ID (Hardcoded)
+DRIVE_ROOT_ID = "1i_YALAikZVwKmSlOr6QgF5dm-0hhMxSw"
+
+# 🔴 2. GEMINI API KEY (Hardcoded for testing)
+# ⚠️ SECURITY WARNING: Do not commit this file to a public repository with the key exposed.
+HARDCODED_GEMINI_KEY = "AIzaSyDmb1hHM0Qn_BKllH0Ev9xVU1EG8k6_53c"
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -49,23 +53,17 @@ def setup_secrets():
         if drive_token:
             with open("token.json", "w") as f: f.write(drive_token)
 
-        # 4. Gemini Key
-        keys_list = os.environ.get("GEMINI_API_KEYS_LIST")
-        if keys_list:
-            try:
-                keys = json.loads(keys_list)
-                return keys[0] if isinstance(keys, list) else keys_list
-            except:
-                return keys_list
-        return None
     except Exception as e:
         log("CRITICAL", f"Secret Setup Failed: {e}")
         sys.exit(1)
 
-# Initialize Secrets
-GEMINI_KEY = setup_secrets()
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
+# Initialize Secrets & Configure Gemini
+setup_secrets()
+
+# Use Hardcoded Key
+if HARDCODED_GEMINI_KEY:
+    genai.configure(api_key=HARDCODED_GEMINI_KEY)
+    log("SUCCESS", "Gemini Configured with Hardcoded Key.")
 else:
     log("CRITICAL", "GEMINI_API_KEY is missing. Aborting.")
     sys.exit(1)
@@ -90,9 +88,11 @@ class DriveManager:
 
     def authenticate(self):
         try:
+            # Priority 1: Use Token (Pre-authorized)
             if os.path.exists('token.json'):
                 self.creds = Credentials.from_authorized_user_file('token.json', SCOPES)
             
+            # Priority 2: Use Credentials (Fresh Login)
             if not self.creds or not self.creds.valid:
                 if self.creds and self.creds.expired and self.creds.refresh_token:
                     self.creds.refresh(Request())
@@ -111,7 +111,9 @@ class DriveManager:
     def list_files(self, folder_id):
         if not self.service: return []
         try:
-            query = f"'{folder_id}' in parents and trashed = false"
+            # Ensure folder_id is clean
+            clean_id = folder_id.strip().split('/')[-1]
+            query = f"'{clean_id}' in parents and trashed = false"
             results = self.service.files().list(q=query, fields="files(id, name, mimeType)").execute()
             return results.get('files', [])
         except Exception as e:
