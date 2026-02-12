@@ -1,0 +1,45 @@
+name: 🚀 AJX Atomic Pipeline (Test Mode)
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'Select Phase to Run'
+        required: true
+        default: '1-Architect'
+        type: choice
+        options:
+          - 1-Architect (Blueprint & Skeleton)
+          # Future phases will go here (Mason, Oracle, Courier)
+
+jobs:
+  # ==================================================
+  # 🏗️ PHASE 1: THE ARCHITECT
+  # ==================================================
+  Architect:
+    if: ${{ inputs.phase == '1-Architect (Blueprint & Skeleton)' }}
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install google-generativeai firebase-admin google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: 🏗️ Run Architect Engine
+        env:
+          # Mapping GitHub Secrets to Script Environment Variables
+          FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+        run: python ajx_architect.py
