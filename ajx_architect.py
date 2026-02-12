@@ -17,11 +17,10 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 # ⚙️ CONFIGURATION & SECRETS SETUP
 # ==========================================
 
-# 🔴 1. GOOGLE DRIVE ROOT ID (Hardcoded)
+# 🔴 1. GOOGLE DRIVE ROOT ID (AJX_Factory)
 DRIVE_ROOT_ID = "1i_YALAikZVwKmSlOr6QgF5dm-0hhMxSw"
 
-# 🔴 2. GEMINI API KEY (Hardcoded for testing)
-# ⚠️ SECURITY WARNING: Do not commit this file to a public repository with the key exposed.
+# 🔴 2. GEMINI API KEY
 HARDCODED_GEMINI_KEY = "AIzaSyDmb1hHM0Qn_BKllH0Ev9xVU1EG8k6_53c"
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
@@ -60,10 +59,10 @@ def setup_secrets():
 # Initialize Secrets & Configure Gemini
 setup_secrets()
 
-# Use Hardcoded Key
 if HARDCODED_GEMINI_KEY:
-    genai.configure(api_key=HARDCODED_GEMINI_KEY)
-    log("SUCCESS", "Gemini Configured with Hardcoded Key.")
+    # Basic cleaning just in case
+    clean_key = HARDCODED_GEMINI_KEY.strip().replace('"', '').replace("'", "")
+    genai.configure(api_key=clean_key)
 else:
     log("CRITICAL", "GEMINI_API_KEY is missing. Aborting.")
     sys.exit(1)
@@ -88,11 +87,9 @@ class DriveManager:
 
     def authenticate(self):
         try:
-            # Priority 1: Use Token (Pre-authorized)
             if os.path.exists('token.json'):
                 self.creds = Credentials.from_authorized_user_file('token.json', SCOPES)
             
-            # Priority 2: Use Credentials (Fresh Login)
             if not self.creds or not self.creds.valid:
                 if self.creds and self.creds.expired and self.creds.refresh_token:
                     self.creds.refresh(Request())
@@ -111,7 +108,6 @@ class DriveManager:
     def list_files(self, folder_id):
         if not self.service: return []
         try:
-            # Ensure folder_id is clean
             clean_id = folder_id.strip().split('/')[-1]
             query = f"'{clean_id}' in parents and trashed = false"
             results = self.service.files().list(q=query, fields="files(id, name, mimeType)").execute()
@@ -153,10 +149,26 @@ class DriveManager:
 
     def find_folder(self, name, parent_id):
         if not self.service: return []
+        clean_parent = parent_id.strip().split('/')[-1]
         query = f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false"
-        if parent_id: query += f" and '{parent_id}' in parents"
+        if parent_id: query += f" and '{clean_parent}' in parents"
         results = self.service.files().list(q=query, fields="files(id, name)").execute()
         return results.get('files', [])
+
+    # 🔥 NEW: AUTO-CREATE FOLDER CAPABILITY
+    def create_folder(self, name, parent_id):
+        try:
+            file_metadata = {
+                'name': name,
+                'mimeType': 'application/vnd.google-apps.folder',
+                'parents': [parent_id]
+            }
+            file = self.service.files().create(body=file_metadata, fields='id').execute()
+            log("SUCCESS", f"Created missing folder: {name} (ID: {file.get('id')})")
+            return file.get('id')
+        except Exception as e:
+            log("ERROR", f"Could not create folder {name}: {e}")
+            return None
 
 # ==========================================
 # 🏛️ THE ARCHITECT (Brain of the Operation)
@@ -166,28 +178,29 @@ class AJXArchitect:
         self.drive = DriveManager()
         self.root_id = DRIVE_ROOT_ID
         
+        # 🔥 SELF-HEALING: Find OR Create '01_Blueprints'
         folders = self.drive.find_folder("01_Blueprints", self.root_id)
         if folders:
             self.blueprint_id = folders[0]['id']
             log("INFO", f"Blueprint Storage Found: {self.blueprint_id}")
         else:
-            log("CRITICAL", "'01_Blueprints' folder is missing in Drive Root.")
-            sys.exit(1)
+            log("WARNING", "'01_Blueprints' missing. Attempting to create...")
+            self.blueprint_id = self.drive.create_folder("01_Blueprints", self.root_id)
+            if not self.blueprint_id:
+                log("CRITICAL", "Failed to create '01_Blueprints'. Check permissions.")
+                sys.exit(1)
 
-    # 🔥 UPDATED: FORCE UPPERCASE LOGIC
     def clean_filename(self, text):
         """Sanitizes strings AND Converts to UPPERCASE"""
-        text = text.upper() # <-- 1. Force Upper
-        text = text.replace(" ", "_") # 2. Replace Spaces
-        return re.sub(r'[^A-Z0-9_]', '', text) # 3. Only Keep Uppercase & Numbers
+        text = text.upper()
+        text = text.replace(" ", "_")
+        return re.sub(r'[^A-Z0-9_]', '', text)
 
     def analyze_index_method_1(self, index_path):
         """METHOD 1: Gemini PDF Analysis"""
         log("INFO", "Method 1 Detected: Starting AI Index Analysis...")
-        
         try:
             file = genai.upload_file(index_path, display_name="Index PDF")
-            
             log("INFO", "Waiting for Gemini Processing...")
             while file.state.name == "PROCESSING":
                 time.sleep(2)
@@ -241,29 +254,19 @@ class AJXArchitect:
         return structure
 
     def generate_ids_and_paths(self, structure, subject_key):
-        """
-        🧠 DSA MAGIC: ID + UPPERCASE PATH MAPPING
-        """
+        """🧠 DSA MAGIC: ID + UPPERCASE PATH MAPPING"""
         log("DSA", "Running Uppercase Path & ID Generation Algorithm...")
         
-        # 🔥 Force Subject Key to Uppercase
         subject_key = self.clean_filename(subject_key) 
-        
         flat_map = []
         global_id = 101
         unit_counter = 1
 
         for unit in structure:
-            # Clean Unit Name (Will be Uppercase now)
             safe_unit = f"{unit_counter:02d}_{self.clean_filename(unit['unit_name'])}"
-            
             chap_counter = 1
             for chap in unit['chapters']:
-                # Clean Chapter Name (Will be Uppercase now)
                 safe_chap = f"{chap_counter:02d}_{self.clean_filename(chap['chapter'])}"
-                
-                # 📍 Drive Path (Everything UPPERCASE)
-                # Example: UPSI_HISTORY/01_ANCIENT_HISTORY/01_STONE_AGE
                 drive_path = f"{subject_key}/{safe_unit}/{safe_chap}"
                 
                 chap['id'] = str(global_id)
@@ -281,38 +284,43 @@ class AJXArchitect:
     def execute(self):
         log("INFO", "🚀 ARCHITECT ENGINE STARTED")
         
-        # 1. Scan Input
+        # 🔥 SELF-HEALING: Check 00_Input
         folders = self.drive.find_folder("00_Input", self.root_id)
         if not folders:
-            log("CRITICAL", "'00_Input' folder missing in Drive.")
+            log("WARNING", "'00_Input' missing. Attempting to create...")
+            input_folder_id = self.drive.create_folder("00_Input", self.root_id)
+            if not input_folder_id:
+                log("CRITICAL", "Could not create '00_Input'.")
+                return
+            log("INFO", "Created '00_Input'. Please upload your book folder inside it and re-run.")
             return
-            
-        input_id = folders[0]['id']
-        book_folders = self.drive.list_files(input_id)
+        else:
+            input_folder_id = folders[0]['id']
+
+        # Scan for books
+        book_folders = self.drive.list_files(input_folder_id)
         book_folders = [f for f in book_folders if f['mimeType'] == 'application/vnd.google-apps.folder']
 
         if not book_folders:
-            log("WARNING", "No Book Folders found in 00_Input.")
+            log("WARNING", "No Book Folders found inside '00_Input'. Please upload a folder (e.g., UPSI_HISTORY).")
             return
 
         for folder in book_folders:
             raw_subject_name = folder['name']
-            # We use this cleaned key for blueprint naming
             subject_key = self.clean_filename(raw_subject_name)
-            
             log("INFO", f"📂 Processing Subject: {raw_subject_name} -> {subject_key}")
             
             files = self.drive.list_files(folder['id'])
             file_map = {f['name']: f['id'] for f in files}
 
-            # 2. Detect Method
+            # Detect Method
             method_type = "UNKNOWN"
             if 'SYLLABUS_DB.json' in file_map: method_type = "METHOD_2"
             elif any(f.lower().endswith('index.pdf') for f in file_map): method_type = "METHOD_1"
             
             log("INFO", f"⚙️ Mode Detected: {method_type}")
 
-            # 3. Handle Common Assets
+            # Common Assets
             prompt_text = "Generate MCQs."
             if 'MASTER_PROMPT.txt' in file_map:
                 self.drive.download_file(file_map['MASTER_PROMPT.txt'], 'prompt.txt')
@@ -323,26 +331,28 @@ class AJXArchitect:
                 log("INFO", "Syncing SDUI to Firebase...")
                 self.drive.download_file(file_map['server_driven_ui.json'], 'sdui.json')
                 with open('sdui.json', 'r', encoding='utf-8') as f: sdui = json.load(f)
-                # Use Uppercase Key for Firebase Path too
                 db.reference(f'Syllabus/{subject_key}/Config/UI').set(sdui)
                 os.remove('sdui.json')
 
-            # 4. Generate Structure
+            # Logic Engine
             structure = []
             main_pdf_id = None
             
             if method_type == "METHOD_1":
-                pdf_name = f"{raw_subject_name}.pdf" # Try finding exact match first
+                pdf_name = f"{raw_subject_name}.pdf"
                 if pdf_name in file_map: main_pdf_id = file_map[pdf_name]
                 else:
                     for f in files:
                         if f['name'].endswith('.pdf') and 'index' not in f['name'].lower():
                             main_pdf_id = f['id']; break
                 
-                index_name = next(k for k in file_map if 'index' in k.lower())
-                self.drive.download_file(file_map[index_name], 'index.pdf')
-                structure = self.analyze_index_method_1('index.pdf')
-                os.remove('index.pdf')
+                index_name = next((k for k in file_map if 'index' in k.lower()), None)
+                if index_name:
+                    self.drive.download_file(file_map[index_name], 'index.pdf')
+                    structure = self.analyze_index_method_1('index.pdf')
+                    os.remove('index.pdf')
+                else:
+                    log("ERROR", "Index PDF not found for Method 1.")
 
             elif method_type == "METHOD_2":
                 self.drive.download_file(file_map['SYLLABUS_DB.json'], 'syllabus.json')
@@ -350,17 +360,15 @@ class AJXArchitect:
                 structure = self.process_db_method_2(db_data)
                 os.remove('syllabus.json')
 
-            # 5. Apply ID Logic & Sync
+            # Saving & Syncing
             if structure:
-                # Passes UPPERCASE subject_key to DSA Logic
                 structure = self.generate_ids_and_paths(structure, subject_key)
-                
                 log("INFO", "Syncing Skeleton to Firebase...")
                 db.reference(f'Syllabus/{subject_key}/Structure').set(structure)
                 
                 blueprint = {
                     "meta": {
-                        "subject_key": subject_key, # UPSI_HISTORY
+                        "subject_key": subject_key,
                         "mode": method_type,
                         "main_pdf_id": main_pdf_id,
                         "created_at": int(time.time())
@@ -369,7 +377,6 @@ class AJXArchitect:
                     "structure": structure
                 }
                 
-                # Save to Drive (Filename is also Uppercase now)
                 self.drive.upload_json(blueprint, f"{subject_key}_BLUEPRINT.json", self.blueprint_id)
                 log("SUCCESS", f"Phase 1 Complete. Blueprint Ready: {subject_key}_BLUEPRINT.json")
             else:
