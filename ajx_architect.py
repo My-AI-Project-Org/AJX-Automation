@@ -7,6 +7,7 @@ import sys
 import google.generativeai as genai
 import firebase_admin
 from firebase_admin import credentials, db
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -39,19 +40,12 @@ def setup_secrets():
         fb_key = os.environ.get("FIREBASE_SERVICE_KEY")
         if fb_key:
             with open("serviceAccountKey.json", "w") as f: f.write(fb_key)
-        else:
-            log("WARNING", "FIREBASE_SERVICE_KEY not found in Env.")
 
-        # 2. Drive Credentials
+        # 2. Drive Credentials (SERVICE ACCOUNT KEY)
         drive_creds = os.environ.get("GDRIVE_CREDENTIALS")
         if drive_creds:
             with open("credentials.json", "w") as f: f.write(drive_creds)
         
-        # 3. Drive Token (For CI/CD)
-        drive_token = os.environ.get("GDRIVE_OAUTH_JSON")
-        if drive_token:
-            with open("token.json", "w") as f: f.write(drive_token)
-
     except Exception as e:
         log("CRITICAL", f"Secret Setup Failed: {e}")
         sys.exit(1)
@@ -60,7 +54,6 @@ def setup_secrets():
 setup_secrets()
 
 if HARDCODED_GEMINI_KEY:
-    # Basic cleaning just in case
     clean_key = HARDCODED_GEMINI_KEY.strip().replace('"', '').replace("'", "")
     genai.configure(api_key=clean_key)
 else:
@@ -77,7 +70,7 @@ if not firebase_admin._apps:
         log("ERROR", f"Firebase Connection Failed: {e}")
 
 # ==========================================
-# 🚙 GOOGLE DRIVE MANAGER (The Bridge)
+# 🚙 GOOGLE DRIVE MANAGER (Service Account Update)
 # ==========================================
 class DriveManager:
     def __init__(self):
@@ -87,21 +80,27 @@ class DriveManager:
 
     def authenticate(self):
         try:
-            if os.path.exists('token.json'):
+            # Check for Service Account Key first (Priority for CI/CD)
+            if os.path.exists('credentials.json'):
+                try:
+                    # Attempt to load as Service Account
+                    self.creds = service_account.Credentials.from_service_account_file(
+                        'credentials.json', scopes=SCOPES)
+                    log("SUCCESS", "Authenticated as Service Account (Robot).")
+                except Exception:
+                    # Fallback to User OAuth if the JSON is not a service account
+                    log("WARNING", "Not a Service Account key. Trying User OAuth...")
+                    self.creds = None
+
+            # Fallback: User OAuth Token (Legacy)
+            if not self.creds and os.path.exists('token.json'):
                 self.creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-            
-            if not self.creds or not self.creds.valid:
-                if self.creds and self.creds.expired and self.creds.refresh_token:
-                    self.creds.refresh(Request())
-                elif os.path.exists('credentials.json'):
-                    log("WARNING", "Refreshing Auth using credentials.json...")
-                    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                else:
-                    log("CRITICAL", "No valid Auth (Token/Creds) found for Drive.")
             
             if self.creds:
                 self.service = build('drive', 'v3', credentials=self.creds)
-                log("SUCCESS", "Google Drive API Authenticated.")
+            else:
+                log("CRITICAL", "No valid Auth found. Ensure GDRIVE_CREDENTIALS contains the Service Account JSON.")
+
         except Exception as e:
             log("CRITICAL", f"Drive Auth Failed: {e}")
 
@@ -155,7 +154,6 @@ class DriveManager:
         results = self.service.files().list(q=query, fields="files(id, name)").execute()
         return results.get('files', [])
 
-    # 🔥 NEW: AUTO-CREATE FOLDER CAPABILITY
     def create_folder(self, name, parent_id):
         try:
             file_metadata = {
@@ -178,7 +176,6 @@ class AJXArchitect:
         self.drive = DriveManager()
         self.root_id = DRIVE_ROOT_ID
         
-        # 🔥 SELF-HEALING: Find OR Create '01_Blueprints'
         folders = self.drive.find_folder("01_Blueprints", self.root_id)
         if folders:
             self.blueprint_id = folders[0]['id']
