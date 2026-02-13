@@ -295,6 +295,19 @@ class AJXArchitect:
             raw_subject_name = folder['name']
             subject_key = self.clean_filename(raw_subject_name)
             log("INFO", f"📂 Processing Subject: {raw_subject_name} -> {subject_key}")
+
+            # ==========================================
+            # ⏭️ SKIP LOGIC (Progress Tracker)
+            # ==========================================
+            try:
+                # Check if Structure already exists in Firebase
+                existing_data = db.reference(f'Syllabus/{subject_key}/Structure').get()
+                if existing_data:
+                    log("SUCCESS", f"⏭️ SKIPPING {subject_key}: Structure already exists in Firebase.")
+                    continue  # Jump to the next folder immediately
+            except Exception as e:
+                log("WARNING", f"Firebase Check Failed (Proceeding anyway): {e}")
+            # ==========================================
             
             files = list_files_in_folder(folder['id'])
             file_map = {f['name']: f['id'] for f in files}
