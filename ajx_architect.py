@@ -17,8 +17,7 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 # ==========================================
 
 # 🔴 HARDCODED DRIVE ROOT ID (Your AJX_Factory Folder)
-# Ye wahi ID hai jo Platinum script me use ho rahi hai
-DRIVE_ROOT_ID = "1i_YALAikZVwKmSlor6QgF5dm-0hhMxSw"
+DRIVE_ROOT_ID = "1i_YALAikZVwKmSlOr6QgF5dm-0hhMxSw"
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -28,27 +27,26 @@ def log(level, msg):
     print(f"{icons.get(level, '')} [{level}] {msg}")
 
 # ==========================================
-# 🔐 AUTHENTICATION (COPIED FROM PLATINUM SCRIPT)
+# 🔐 AUTHENTICATION (HUMAN PRIORITY)
 # ==========================================
 def setup_auth():
     """
-    Robust Auth Logic directly from AJX PLATINUM script.
-    Prioritizes Service Account (Robot) > User Token.
+    Robust Auth Logic.
+    PRIORITY 1: Human OAuth (Full Storage)
+    PRIORITY 2: Service Account (Zero Storage - Fallback)
     """
-    log("INFO", "Initializing Auth Logic (Platinum Style)...")
+    log("INFO", "Initializing Auth Logic...")
 
     # 1. Setup Gemini Key
     keys_json = os.environ.get("GEMINI_API_KEYS_LIST")
     if keys_json:
         try:
-            # Handle List or String
             if "[" in keys_json:
                 keys = json.loads(keys_json)
                 key = keys[0]
             else:
                 key = keys_json.split(',')[0].strip()
             
-            # Clean Key
             clean_key = key.replace('"', '').replace("'", "").strip()
             genai.configure(api_key=clean_key)
             log("SUCCESS", "Gemini API Configured.")
@@ -56,40 +54,38 @@ def setup_auth():
             log("CRITICAL", f"Gemini Key Error: {e}")
             sys.exit(1)
     else:
-        # Fallback for hardcoded key if env var missing (Testing purposes)
         HARDCODED_KEY = "AIzaSyDmb1hHM0Qn_BKllH0Ev9xVU1EG8k6_53c"
         genai.configure(api_key=HARDCODED_KEY)
         log("WARNING", "Using Hardcoded Gemini Key.")
 
-    # 2. Setup Drive Auth
-    creds = None
-    
-    # Check Env Var for Service Account
-    sa_json = os.environ.get("GDRIVE_CREDENTIALS")
-    if sa_json:
-        with open("credentials.json", "w") as f: f.write(sa_json)
-        
-    if os.path.exists('credentials.json'):
-        try:
-            creds = service_account.Credentials.from_service_account_file(
-                'credentials.json', scopes=SCOPES)
-            log("SUCCESS", "Authenticated as Robot (Service Account).")
-            return build('drive', 'v3', credentials=creds)
-        except Exception as e:
-            log("WARNING", f"Service Account Auth Failed: {e}")
-
-    # Fallback to User Token
+    # 2. Setup Drive Auth - TRY HUMAN FIRST (OAuth)
     oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
     if oauth_json:
         try:
+            log("INFO", "Attempting Human Auth (OAuth)...")
             token_info = json.loads(oauth_json)
             creds = Credentials.from_authorized_user_info(token_info, SCOPES)
-            log("SUCCESS", "Authenticated as User (OAuth).")
-            return build('drive', 'v3', credentials=creds)
-        except:
-            pass
+            service = build('drive', 'v3', credentials=creds)
+            log("SUCCESS", "✅ Authenticated as HUMAN (Full Storage Access).")
+            return service
+        except Exception as e:
+            log("WARNING", f"Human Auth Failed: {e}. Falling back to Robot...")
 
-    log("CRITICAL", "FATAL: No valid Drive Auth found.")
+    # 3. Setup Drive Auth - FALLBACK TO ROBOT (Service Account)
+    sa_json = os.environ.get("GDRIVE_CREDENTIALS")
+    if sa_json:
+        try:
+            log("INFO", "Attempting Robot Auth (Service Account)...")
+            # Load directly from string (no file write needed)
+            creds = service_account.Credentials.from_service_account_info(
+                json.loads(sa_json), scopes=SCOPES)
+            service = build('drive', 'v3', credentials=creds)
+            log("SUCCESS", "🤖 Authenticated as ROBOT (Zero Storage Quota).")
+            return service
+        except Exception as e:
+            log("WARNING", f"Service Account Auth Failed: {e}")
+
+    log("CRITICAL", "❌ FATAL: No valid Drive Auth found. Please set GDRIVE_OAUTH_JSON.")
     sys.exit(1)
 
 # Initialize Service globally
@@ -105,6 +101,7 @@ if not firebase_admin._apps:
             # Fallback to separate env var
             fb_key = os.environ.get("FIREBASE_SERVICE_KEY")
             if fb_key:
+                # Use a temp file for Firebase cert
                 with open("firebase_key.json", "w") as f: f.write(fb_key)
                 cred = credentials.Certificate("firebase_key.json")
             else:
@@ -123,7 +120,6 @@ def get_folder_id(folder_name, parent_id=DRIVE_ROOT_ID):
     """Finds a folder specifically inside the parent_id."""
     if not parent_id: parent_id = DRIVE_ROOT_ID
     
-    # Handle root case ID cleaning
     clean_parent = parent_id.strip().split('/')[-1]
     
     query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{clean_parent}' in parents"
@@ -132,7 +128,7 @@ def get_folder_id(folder_name, parent_id=DRIVE_ROOT_ID):
     return files[0]['id'] if files else None
 
 def create_folder(folder_name, parent_id=DRIVE_ROOT_ID):
-    """Creates a folder if it doesn't exist (Platinum Logic)."""
+    """Creates a folder if it doesn't exist."""
     if not parent_id: parent_id = DRIVE_ROOT_ID
     
     existing = get_folder_id(folder_name, parent_id)
@@ -189,7 +185,6 @@ def upload_json(data, filename, folder_id):
 # ==========================================
 class AJXArchitect:
     def __init__(self):
-        # 🔥 PLATINUM LOGIC: Ensure folders exist using the robust functions
         log("INFO", "Architect initializing workspace...")
         
         # 1. Ensure 01_Blueprints exists inside Root
@@ -229,7 +224,7 @@ class AJXArchitect:
               }
             ]
             """
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            model = genai.GenerativeModel("gemini-2.0-flash")
             response = model.generate_content([file, prompt])
             text = response.text.replace("```json", "").replace("```", "").strip()
             return json.loads(text)
@@ -288,7 +283,7 @@ class AJXArchitect:
     def execute(self):
         log("INFO", "🚀 ARCHITECT ENGINE STARTED")
         
-        # Scan Input Folder (Using Platinum Logic)
+        # Scan Input Folder
         book_folders = list_files_in_folder(self.input_id)
         book_folders = [f for f in book_folders if f['mimeType'] == 'application/vnd.google-apps.folder']
 
