@@ -15,7 +15,7 @@ from googleapiclient.errors import HttpError
 # ==========================================
 # 🛑 CONFIGURATION
 # ==========================================
-DRIVE_ROOT_ID = "1i_YALAikZVwKmSlOr6QgF5dm-0hhMxSw"  # Your Exact Folder ID
+DRIVE_ROOT_ID = "1i_YALAikZVwKmSlor6QgF5dm-0hhMxSw"  # Your Exact Folder ID
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
 def log(level, msg):
