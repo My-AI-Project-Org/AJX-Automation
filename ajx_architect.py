@@ -229,7 +229,7 @@ class AJXArchitect:
               }
             ]
             """
-            model = genai.GenerativeModel("gemini-2.0-flash")
+            model = genai.GenerativeModel("gemini-2.5-flash")
             response = model.generate_content([file, prompt])
             text = response.text.replace("```json", "").replace("```", "").strip()
             return json.loads(text)
