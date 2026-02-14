@@ -223,7 +223,6 @@ class AJXOracle:
                     sample_file = genai.upload_file(path=img_name, display_name=img_name)
                     
                     # 🔥 CONTEXT INJECTION
-                    # We inject the specific Chapter Name and Page Number into the prompt
                     dynamic_prompt = (
                         f"{self.master_prompt}\n\n"
                         f"--- CONTEXT INFO ---\n"
@@ -240,15 +239,15 @@ class AJXOracle:
                     data = recursive_repair(response.text)
                     
                     if data:
-                        # 🛠️ Assign Local IDs (1, 2, 3...) just for structure
-                        # Global IDs will be handled by Phase 4 (Courier)
+                        # 🛠️ Assign Local IDs
                         for idx, q in enumerate(data):
                             q['local_id'] = idx + 1
                             q['source_image'] = img_name
                         
                         # C. Upload Result
                         if upload_json(data, json_target, folder_id):
-                            log("SUCCESS", f"✅ Generated {json_target}")
+                            # 👇👇👇 UPDATED LINE IS HERE 👇👇👇
+                            log("SUCCESS", f"✅ Generated {json_target} (Contains {len(data)} MCQs)")
                             success = True
                             break
                     else:
