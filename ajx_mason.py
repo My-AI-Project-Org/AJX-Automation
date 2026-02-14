@@ -13,7 +13,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 # ==========================================
-# ⚙️ CONFIGURATION (PLATINUM EDITION)
+# ⚙️ CONFIGURATION
 # ==========================================
 
 # 🔴 HARDCODED DRIVE ROOT ID (Your AJX_Factory Folder)
@@ -37,7 +37,7 @@ def log(level, msg):
 def setup_auth():
     log("INFO", "Initializing Auth Logic...")
     
-    # 1. Try Human OAuth (Priority - Faster & Unlimited)
+    # 1. Try Human OAuth (Priority)
     oauth_json = os.environ.get("GDRIVE_OAUTH_JSON")
     if oauth_json:
         try:
@@ -85,8 +85,14 @@ def list_folders_with_ids(parent_id):
     results = service.files().list(q=query, fields="files(id, name)", pageSize=1000).execute()
     return {f['name']: f['id'] for f in results.get('files', [])}
 
+def list_files_in_folder(folder_id):
+    """Returns a list of files inside a folder (Crucial for reading Blueprints)"""
+    query = f"'{folder_id}' in parents and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    return results.get('files', [])
+
 def count_files_in_folder(folder_id):
-    """Returns number of actual files inside a folder"""
+    """Returns number of actual files inside a folder (For Integrity Check)"""
     query = f"'{folder_id}' in parents and trashed = false and mimeType != 'application/vnd.google-apps.folder'"
     results = service.files().list(q=query, fields="files(id)", pageSize=1000).execute()
     return len(results.get('files', []))
@@ -129,7 +135,7 @@ class AJXMason:
         log("INFO", f"Mason initializing with {MAX_WORKERS} Workers...")
         self.blueprint_folder_id = get_folder_id("01_Blueprints")
         if not self.blueprint_folder_id:
-            log("CRITICAL", "01_Blueprints folder not found!")
+            log("CRITICAL", "01_Blueprints folder not found! Run Architect first.")
             sys.exit(1)
 
         self.masonry_id = create_folder("02_Masonry", DRIVE_ROOT_ID)
