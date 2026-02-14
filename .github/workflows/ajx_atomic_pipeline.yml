@@ -11,6 +11,8 @@ on:
         options:
           - 1-Architect
           - 2-Mason
+          - 3-Oracle
+          - 4-Courier
 
 jobs:
   # ==================================================
@@ -81,3 +83,79 @@ jobs:
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
         run: python ajx_mason.py --shard ${{ matrix.shard_index }} --total 5
+
+  # ==================================================
+  # 🔮 PHASE 3: THE ORACLE (AI Generation Cluster)
+  # ==================================================
+  Oracle:
+    needs: Mason
+    if: |
+      always() && 
+      (
+        inputs.start_phase == '3-Oracle' || 
+        (inputs.start_phase == '2-Mason' && needs.Mason.result == 'success') ||
+        (inputs.start_phase == '1-Architect' && needs.Mason.result == 'success')
+      )
+    runs-on: ubuntu-latest
+
+    # 🔥 STRATEGY: 5 Parallel AI Workers
+    strategy:
+      fail-fast: false
+      matrix:
+        shard_index: [0, 1, 2, 3, 4]
+
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install google-generativeai google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: 🔮 Run Oracle Engine (Shard ${{ matrix.shard_index }})
+        env:
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+          GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
+        run: python ajx_oracle.py --shard ${{ matrix.shard_index }} --total 5
+
+  # ==================================================
+  # 🚚 PHASE 4: THE COURIER (Final Sequencer & Sync)
+  # ==================================================
+  Courier:
+    needs: Oracle
+    if: |
+      always() && 
+      (
+        inputs.start_phase == '4-Courier' || 
+        (inputs.start_phase == '3-Oracle' && needs.Oracle.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install firebase-admin zstandard google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: 🚚 Run Courier Engine
+        env:
+          FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
+          FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+        run: python ajx_courier.py
