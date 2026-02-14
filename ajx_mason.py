@@ -86,7 +86,7 @@ def setup_auth():
 service = setup_auth()
 
 # ==========================================
-# 📂 DRIVE HELPER FUNCTIONS (Protected)
+# 📂 DRIVE HELPER FUNCTIONS
 # ==========================================
 @retry_with_backoff
 def get_folder_id(folder_name, parent_id=DRIVE_ROOT_ID):
@@ -98,12 +98,10 @@ def get_folder_id(folder_name, parent_id=DRIVE_ROOT_ID):
 
 @retry_with_backoff
 def create_folder(folder_name, parent_id=DRIVE_ROOT_ID):
-    # Quick check inside create to avoid double API calls from outside
     query = f"name = '{folder_name}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false and '{parent_id}' in parents"
     results = service.files().list(q=query, fields="files(id)").execute()
     files = results.get('files', [])
     if files: return files[0]['id']
-
     meta = {'name': folder_name, 'mimeType': 'application/vnd.google-apps.folder', 'parents': [parent_id]}
     folder = service.files().create(body=meta, fields='id').execute()
     return folder.get('id')
@@ -150,7 +148,7 @@ def upload_file(local_path, folder_id, mime_type='image/jpeg'):
     return True
 
 # ==========================================
-# 🧱 THE MASON (Distributed Worker)
+# 🧱 THE MASON (Distributed Worker + Offset Logic)
 # ==========================================
 class AJXMason:
     def __init__(self):
@@ -176,6 +174,9 @@ class AJXMason:
         subject_key = task_data['subject_key']
         pdf_path = "source.pdf"
         
+        # 🔥 GET OFFSET
+        global_offset = task_data.get('global_offset', 0)
+        
         chap_name = chapter['chapter']
         chap_id = chapter.get('id')
         start_p = chapter.get('start_p', 1)
@@ -192,11 +193,25 @@ class AJXMason:
         generated_files = []
         try:
             doc = fitz.open(pdf_path)
-            start_idx = max(0, start_p - 1)
-            end_idx = min(len(doc), end_p)
-            img_counter = 1 
             
-            log("MASON", f"📸 Processing {folder_name} (Pages {start_p}-{end_p})...")
+            # 🔥 APPLY OFFSET (Map Book Page -> PDF Page)
+            # Example: Book Pg 10 - Offset 9 = PDF Pg 1 (Index 0)
+            corrected_start_p = start_p - global_offset
+            corrected_end_p = end_p - global_offset
+
+            # Safety check (Ensure we don't go below page 1)
+            if corrected_start_p < 1: corrected_start_p = 1
+            
+            log("MASON", f"📸 Processing {folder_name}: Book {start_p}-{end_p} -> PDF {corrected_start_p}-{corrected_end_p}")
+            
+            # Convert to 0-based index for PyMuPDF
+            start_idx = max(0, corrected_start_p - 1)
+            end_idx = corrected_end_p 
+            
+            # Clamp to PDF limits
+            end_idx = min(len(doc), end_idx)
+
+            img_counter = 1 
 
             for i in range(start_idx, end_idx):
                 page = doc.load_page(i)
@@ -226,7 +241,8 @@ class AJXMason:
                 "unit": unit_name,
                 "subject": subject_key,
                 "original_start_page": start_p,
-                "total_images": len(generated_files)
+                "total_images": len(generated_files),
+                "pdf_page_range": f"{corrected_start_p}-{corrected_end_p}"
             }
             
             meta_path = os.path.join(local_chap_dir, "meta.json")
@@ -262,6 +278,18 @@ class AJXMason:
         log("AUDIT", f"🔍 Audit: Checking progress for {subject_key}...")
         existing_folders_map = list_folders_with_ids(subject_folder_id)
         
+        # 📐 CALCULATE GLOBAL OFFSET
+        # Find the absolute first page mentioned in the blueprint
+        all_start_pages = []
+        for unit in structure:
+            for chapter in unit['chapters']:
+                all_start_pages.append(chapter.get('start_p', 1))
+        
+        min_start_p = min(all_start_pages) if all_start_pages else 1
+        global_offset = min_start_p - 1 
+        
+        log("INFO", f"📐 Global Offset: {global_offset} pages (Book Pg {min_start_p} maps to PDF Pg 1)")
+
         tasks = []
         needs_pdf = False
         
@@ -301,7 +329,8 @@ class AJXMason:
                 "chapter": chapter,
                 "unit_name": unit['unit_name'],
                 "subject_key": subject_key,
-                "subject_folder_id": subject_folder_id
+                "subject_folder_id": subject_folder_id,
+                "global_offset": global_offset # PASS OFFSET TO WORKER
             })
 
         if not tasks:
