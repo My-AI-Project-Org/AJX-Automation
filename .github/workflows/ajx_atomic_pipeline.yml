@@ -1,23 +1,24 @@
-name: 🚀 AJX Atomic Pipeline (Test Mode)
+name: 🚀 AJX Atomic Pipeline (Waterfall Mode)
 
 on:
   workflow_dispatch:
     inputs:
-      phase:
-        description: 'Select Phase to Run'
+      start_phase:
+        description: 'Select Starting Point (Runs all subsequent phases)'
         required: true
         default: '1-Architect'
         type: choice
         options:
-          - 1-Architect (Blueprint & Skeleton)
-          # Future phases will go here (Mason, Oracle, Courier)
+          - 1-Architect
+          - 2-Mason
+          # Future: 3-Oracle, 4-Courier
 
 jobs:
   # ==================================================
   # 🏗️ PHASE 1: THE ARCHITECT
   # ==================================================
   Architect:
-    if: ${{ inputs.phase == '1-Architect (Blueprint & Skeleton)' }}
+    if: ${{ inputs.start_phase == '1-Architect' }}
     runs-on: ubuntu-latest
     
     steps:
@@ -36,10 +37,57 @@ jobs:
 
       - name: 🏗️ Run Architect Engine
         env:
-          # Mapping GitHub Secrets to Script Environment Variables
           FIREBASE_SERVICE_KEY: ${{ secrets.FIREBASE_SERVICE_KEY }}
           FIREBASE_DB_URL: ${{ secrets.FIREBASE_DB_URL }}
           GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
           GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
           GEMINI_API_KEYS_LIST: ${{ secrets.GEMINI_API_KEYS_LIST }}
         run: python ajx_architect.py
+
+  # ==================================================
+  # 🧱 PHASE 2: THE MASON
+  # ==================================================
+  Mason:
+    needs: Architect
+    # Logic: Run if we started at Phase 2, OR if we started at Phase 1 and it succeeded.
+    if: |
+      always() && 
+      (
+        inputs.start_phase == '2-Mason' || 
+        (inputs.start_phase == '1-Architect' && needs.Architect.result == 'success')
+      )
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 📦 Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install pymupdf google-api-python-client google-auth-httplib2 google-auth-oauthlib
+
+      - name: 🧱 Run Mason Engine
+        env:
+          GDRIVE_CREDENTIALS: ${{ secrets.GDRIVE_CREDENTIALS }}
+          GDRIVE_OAUTH_JSON: ${{ secrets.GDRIVE_OAUTH_JSON }}
+        run: python ajx_mason.py
+
+  # ==================================================
+  # 🔮 PHASE 3: THE ORACLE (Placeholder for Future)
+  # ==================================================
+  # Oracle:
+  #   needs: Mason
+  #   if: |
+  #     always() && 
+  #     (
+  #       inputs.start_phase == '3-Oracle' || 
+  #       (inputs.start_phase == '2-Mason' && needs.Mason.result == 'success') ||
+  #       (inputs.start_phase == '1-Architect' && needs.Mason.result == 'success')
+  #     )
+  #   ...
