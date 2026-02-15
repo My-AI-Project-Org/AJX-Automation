@@ -323,4 +323,18 @@ class AJXOracle:
                     log("WARNING", f"Chapter folder {chap_id} not found in Drive. Did Mason finish?")
             
             # Cleanup Blueprint
-            if os.path.exists("blueprint.json
+            # Cleanup Blueprint (Taaki agla subject fresh start kare)
+            if os.path.exists("blueprint.json"):
+                os.remove("blueprint.json")
+
+# ==========================================
+# 🚀 ENTRY POINT
+# ==========================================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--shard", type=int, default=0)
+    parser.add_argument("--total", type=int, default=1)
+    args = parser.parse_args()
+
+    oracle = AJXOracle(shard_index=args.shard, total_shards=args.total)
+    oracle.execute()
