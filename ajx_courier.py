@@ -111,11 +111,21 @@ class AJXCourier:
     def push_to_firebase(self, data, subject_key, unit_name, chap_name, current_global_id):
         """Standardized Push: Assign IDs -> Compress -> Base64 -> Firebase"""
         start_id = current_global_id
-        for q in data:
+        
+        # 🔥 UPDATE: Fresh Sequential Logic for the Whole Chapter
+        for index, q in enumerate(data):
+            # 1. GLOBAL ID: Ye accountant ke hisab se continuously badhega (e.g. 1001, 1002...)
             q['id'] = current_global_id
             current_global_id += 1
-            # Clean up temp fields for clean App JSON
-            if 'local_id' in q: q['display_num'] = q.pop('local_id')
+            
+            # 2. LOCAL ID: Ye hamesha 1 se shuru hoga aur line se chalega (1, 2, 3...)
+            # Ye wahi hai jo Question Card par dikhega
+            q['local_id'] = index + 1
+            
+            # 3. Model Compatibility: Agar Android me 'displayNum' use kiya hai
+            q['displayNum'] = index + 1 
+
+            # Cleanup: Extra data delete karein taaki payload chota rahe
             if 'source_image' in q: del q['source_image']
         
         end_id = current_global_id - 1
@@ -124,9 +134,9 @@ class AJXCourier:
         b64_payload = base64.b64encode(compressed).decode('utf-8')
         md5_hash = hashlib.md5(b64_payload.encode()).hexdigest()
 
-        # Android Path: Syllabus/Subject/Data/Unit/Chapter
-        safe_unit = unit_name.replace(".", "").replace("/", "_").upper().trim()
-        safe_chap = chap_name.replace(".", "").replace("/", "_").upper().trim()
+        # 🔥 Python Fix: .trim() ko .strip() karein (Python me trim nahi hota)
+        safe_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
+        safe_chap = chap_name.replace(".", "").replace("/", "_").upper().strip()
         ref_path = f"Syllabus/{subject_key}/Data/{safe_unit}/{safe_chap}"
 
         db.reference(ref_path).set({
@@ -137,7 +147,7 @@ class AJXCourier:
             "id_range": f"{start_id}-{end_id}",
             "last_updated": int(time.time())
         })
-        log("FIREBASE", f"🔥 Synced {chap_name} (IDs: {start_id}-{end_id})")
+        log("FIREBASE", f"🔥 Synced {chap_name} (Global IDs: {start_id}-{end_id} | Local: 1-{len(data)})")
         return current_global_id
 
     def sync_chapter(self, subject_key, unit_name, chapter, current_global_id):
