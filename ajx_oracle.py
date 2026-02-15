@@ -176,7 +176,7 @@ class AJXOracle:
         pending_images = []
         for name, fid in file_map.items():
             if name.endswith(".jpg"):
-                json_name = name.replace(".jpg", ".json")
+                json_name = name.replace(".jpg", ".JSON").replace(".JPG", ".JSON")
                 
                 # 🔥 SKIP LOGIC: If JSON exists, don't redo it
                 if json_name in file_map: 
