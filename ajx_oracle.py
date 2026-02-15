@@ -217,7 +217,7 @@ class AJXOracle:
                     # Configure Gemini
                     api_key = self.get_random_key()
                     genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel('gemini-2.0-flash')
+                    model = genai.GenerativeModel('gemini-2.5-flash')
                     
                     # Upload to Gemini (Temp)
                     sample_file = genai.upload_file(path=img_name, display_name=img_name)
