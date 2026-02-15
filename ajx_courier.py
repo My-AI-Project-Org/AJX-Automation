@@ -112,20 +112,21 @@ class AJXCourier:
         """Standardized Push: Assign IDs -> Compress -> Base64 -> Firebase"""
         start_id = current_global_id
         
-        # 🔥 UPDATE: Fresh Sequential Logic for the Whole Chapter
+        # 🔥 FIX 1: Use 'enumerate' to create a fresh sequence for the whole chapter
         for index, q in enumerate(data):
-            # 1. GLOBAL ID: Ye accountant ke hisab se continuously badhega (e.g. 1001, 1002...)
+            # ✅ GLOBAL ID: Database ke liye unique key (e.g., 101, 102, 103...)
             q['id'] = current_global_id
             current_global_id += 1
             
-            # 2. LOCAL ID: Ye hamesha 1 se shuru hoga aur line se chalega (1, 2, 3...)
-            # Ye wahi hai jo Question Card par dikhega
-            q['local_id'] = index + 1
+            # ✅ LOCAL ID: Question Card ke liye sequential number (1, 2, 3...)
+            # Ye ab image change hone par reset nahi hoga.
+            new_sequence_num = index + 1
+            q['local_id'] = new_sequence_num
             
-            # 3. Model Compatibility: Agar Android me 'displayNum' use kiya hai
-            q['displayNum'] = index + 1 
+            # Optional: Agar Android app 'display_num' use kar raha hai to usse bhi set karein
+            q['display_num'] = new_sequence_num
 
-            # Cleanup: Extra data delete karein taaki payload chota rahe
+            # Cleanup: Source image ka naam hata dein
             if 'source_image' in q: del q['source_image']
         
         end_id = current_global_id - 1
@@ -134,7 +135,7 @@ class AJXCourier:
         b64_payload = base64.b64encode(compressed).decode('utf-8')
         md5_hash = hashlib.md5(b64_payload.encode()).hexdigest()
 
-        # 🔥 Python Fix: .trim() ko .strip() karein (Python me trim nahi hota)
+        # 🔥 FIX 2: Python mein .trim() nahi hota, .strip() use karein
         safe_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
         safe_chap = chap_name.replace(".", "").replace("/", "_").upper().strip()
         ref_path = f"Syllabus/{subject_key}/Data/{safe_unit}/{safe_chap}"
@@ -147,7 +148,8 @@ class AJXCourier:
             "id_range": f"{start_id}-{end_id}",
             "last_updated": int(time.time())
         })
-        log("FIREBASE", f"🔥 Synced {chap_name} (Global IDs: {start_id}-{end_id} | Local: 1-{len(data)})")
+        # Log message update kiya taaki clear ho ki local ID 1 se shuru ho rahi hai
+        log("FIREBASE", f"🔥 Synced {chap_name} (Global IDs: {start_id}-{end_id} | Local IDs: 1-{len(data)})")
         return current_global_id
 
     def sync_chapter(self, subject_key, unit_name, chapter, current_global_id):
