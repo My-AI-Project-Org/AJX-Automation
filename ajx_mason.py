@@ -30,7 +30,7 @@ def log(level, msg):
         "ERROR": "❌", "CRITICAL": "💀", "MASON": "🧱", 
         "SKIP": "⏭️", "AUDIT": "🧐", "RETRY": "⏳"
     }
-    print(f"{icons.get(level, '')} [{level}] {msg}")
+    print(f"{icons.get(level, '')} [{level}] {msg}",flush=True)
 
 # ==========================================
 # 🛡️ DSA: EXPONENTIAL BACKOFF DECORATOR
