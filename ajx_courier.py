@@ -226,6 +226,7 @@ class AJXCourier:
             mcq['local_id'] = index + 1        # Local Sequence
             mcq['display_num'] = index + 1
             mcq['unit'] = unit_name.upper()
+            mcq['subject'] = subject_key
             mcq['chapter'] = chap_name.upper()
             if 'source_image' in mcq: del mcq['source_image']
 
