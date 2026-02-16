@@ -147,6 +147,7 @@ class AJXOracle:
         
         # Fallback: If math is weird, take all keys (better than crashing)
         self.my_keys = all_keys[start:end] if len(all_keys) >= total_shards else all_keys
+        self.initial_count = len(self.my_keys)
         
         log("ORACLE", f"Worker {shard_index+1}/{total_shards} loaded {len(self.my_keys)} API Keys.")
 
@@ -226,7 +227,7 @@ class AJXOracle:
                 try:
                     # Configure Gemini with specific key
                     genai.configure(api_key=current_api_key)
-                    model = genai.GenerativeModel('gemini-2.0-flash') # Model name verify kr lena
+                    model = genai.GenerativeModel('gemini-2.5-flash') # Model name verify kr lena
                     
                     # Upload to Gemini (Temp)
                     sample_file = genai.upload_file(path=img_name, display_name=img_name)
@@ -267,6 +268,10 @@ class AJXOracle:
                     if current_api_key in self.my_keys:
                         self.my_keys.remove(current_api_key)
                     # Retry count mat badhao, turant nayi key try karo
+                    remaining = len(self.my_keys)
+                    used = self.initial_count - remaining
+                    # 📊 PRO STATUS BAR
+                    log("ACCOUNTANT", f"📉 STATUS: Used {used} | Remaining {remaining} | Alive: {int((remaining/self.initial_count)*100)}%")
                     continue 
 
                 except Exception as e:
