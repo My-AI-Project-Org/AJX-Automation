@@ -26,7 +26,7 @@ def log(level, msg):
         "INFO": "ℹ️", "SUCCESS": "✅", "WARNING": "⚠️", 
         "ERROR": "❌", "COURIER": "🚚", "FIREBASE": "🔥", "MERGE": "🔗", "ACCOUNTANT": "💰"
     }
-    print(f"{icons.get(level, '')} [{level}] {msg}")
+    print(f"{icons.get(level, '')} [{level}] {msg}",flush=True)
 
 # ==========================================
 # 🔐 AUTHENTICATION
@@ -156,50 +156,71 @@ class AJXCourier:
         chap_id = chapter['id']
         chap_name = chapter['chapter']
         
-        # 1. Access Chapter Folder on Drive
+        # 🟢 PRE-SYNC AUDIT (Drive + Firebase)
         subject_folder_id = find_file_by_name(subject_key, parent_id=self.masonry_root_id)
-        all_folders = list_files_in_folder(subject_folder_id)
-        target_folder = next((f for f in all_folders if f['name'].startswith(f"{chap_id}_")), None)
-        if not target_folder: return None
+        target_folder = self.get_chapter_folder(subject_folder_id, chap_id)
+        if not target_folder: return current_global_id # Skip if folder missing
 
-        # 2. Double-Check Drive vs Firebase (Self-Healing)
-        files = list_files_in_folder(target_folder['id'])
-        file_map = {f['name'].upper(): f['id'] for f in files}
+        # Chapter-wise Ledger Path in Firebase
+        s_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
+        s_chap = chap_name.replace(".", "").replace("/", "_").upper().strip()
+        meta_ref = db.reference(f"Syllabus/{subject_key}/Metadata/{s_unit}/{s_chap}")
         
-        safe_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
-        safe_chap = chap_name.replace(".", "").replace("/", "_").upper().strip()
-        fb_status = db.reference(f"Syllabus/{subject_key}/Data/{safe_unit}/{safe_chap}/status").get()
-
-        if "DATA.JSON" in file_map and fb_status != "LIVE":
-            log("INFO", f"♻️ Healing: Found DATA.JSON on Drive for {chap_name}. Restoring...")
-            merged_data = download_json(file_map["DATA.JSON"])
-            return self.push_to_firebase(merged_data, subject_key, unit_name, chap_name, current_global_id)
-
-        # 3. Perform Normal Audit & Merge
-        if "META.JSON" not in file_map and "meta.json" not in file_map: return "STOP"
+        # Drive Files Audit
+        drive_files = {f['name'].upper(): f['id'] for f in list_files_in_folder(target_folder['id'])}
+        has_data_json = "DATA.JSON" in drive_files
         
-        meta_id = file_map.get("META.JSON") or file_map.get("meta.json")
-        meta = download_json(meta_id)
-        total_parts_needed = meta.get('total_images', 0)
-        
-        part_files = [f for f in files if f['name'].upper().endswith('.JSON') and f['name'].upper() not in ['META.JSON', 'DATA.JSON']]
-        
-        if len(part_files) < total_parts_needed:
-            log("INFO", f"⏳ {chap_name} Incomplete ({len(part_files)}/{total_parts_needed}). Paused.")
-            return "STOP"
+        # Firebase Metadata Audit
+        chap_meta = meta_ref.get() or {}
+        is_live = db.reference(f"Syllabus/{subject_key}/Data/{s_unit}/{s_chap}/status").get() == "LIVE"
 
-        # 4. Merge Logic
-        part_files.sort(key=lambda x: int(re.search(r'\d+', x['name']).group()) if re.search(r'\d+', x['name']) else 0)
-        merged_data = []
-        for pf in part_files:
-            data = download_json(pf['id'])
-            if isinstance(data, list): merged_data.extend(data)
+        # --- 🔥 SCENARIO 1: SKIP LOGIC (Perfect Sync) ---
+        if has_data_json and is_live:
+            log("SKIP", f"⏭️ {chap_name} is already healthy and LIVE. Skipping.")
+            return chap_meta.get("end_id", current_global_id - 1) + 1
 
-        # Save Final DATA.JSON to Drive for Backup
+        # --- 🔥 SCENARIO 2: REPAIR LOGIC (Drive File Missing but Range Reserved) ---
+        if chap_meta.get("start_id"):
+            log("WARNING", f"🛠️ Repairing {chap_name}. Re-using reserved Global IDs: {chap_meta['start_id']} onwards.")
+            id_to_use = chap_meta["start_id"]
+            is_new_chapter = False
+        else:
+            # --- 🔥 SCENARIO 3: NEW CHAPTER (Normal Flow) ---
+            id_to_use = current_global_id
+            is_new_chapter = True
+            log("ACCOUNTANT", f"🆕 First time sync for {chap_name}. Starting Global ID: {id_to_use}")
+
+        # --- CORE SYNC PROCESS ---
+        merged_data = self.merge_oracle_jsons(drive_files) # Image 1.json, 2.json merge karega
+        if not merged_data: return current_global_id
+
+        # ID INJECTION (The Brains)
+        for index, mcq in enumerate(merged_data):
+            mcq['id'] = id_to_use + index       # Global Unique ID
+            mcq['local_id'] = index + 1        # Card Sequence (1, 2, 3...)
+            mcq['display_num'] = index + 1
+            mcq['unit'] = unit_name.upper()
+            mcq['chapter'] = chap_name.upper()
+
+        # Update Accountant/Metadata
+        new_end_id = id_to_use + len(merged_data) - 1
+        
+        # Save to Drive (Backup)
         upload_json(merged_data, "DATA.JSON", target_folder['id'])
-        log("SUCCESS", f"💾 DATA.JSON Saved for {chap_name}.")
+        
+        # Save to Firebase
+        self.push_to_firebase(merged_data, subject_key, s_unit, s_chap, id_to_use, new_end_id)
+        
+        # Save Chapter Ledger (Range Reservation)
+        meta_ref.update({
+            "start_id": id_to_use,
+            "end_id": new_end_id,
+            "status": "LIVE",
+            "count": len(merged_data)
+        })
 
-        return self.push_to_firebase(merged_data, subject_key, unit_name, chap_name, current_global_id)
+        # Agar naya chapter tha, toh Global Accountant badhao
+        return (new_end_id + 1) if is_new_chapter else current_global_id
 
     def execute(self):
         log("INFO", "🚀 COURIER STARTED (Sequential Mode)")
