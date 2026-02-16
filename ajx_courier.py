@@ -98,7 +98,7 @@ def upload_json(data, filename, folder_id):
     if os.path.exists(local_path): os.remove(local_path)
 
 # ==========================================
-# 🚚 THE COURIER ENGINE (FIXED & COMPLETE)
+# 🚚 THE COURIER ENGINE (STRICT SEQUENTIAL)
 # ==========================================
 class AJXCourier:
     def __init__(self):
@@ -108,7 +108,7 @@ class AJXCourier:
             log("CRITICAL", "Required Drive Folders not found.")
             sys.exit(1)
 
-    # 🛠️ HELPER 1: Merge Oracle Files (Missing in your script)
+    # 🛠️ HELPER: Merge Oracle Files
     def merge_oracle_jsons(self, drive_files_map):
         part_files = [
             {'name': name, 'id': fid} 
@@ -127,12 +127,12 @@ class AJXCourier:
                 log("WARNING", f"Failed to merge {pf['name']}: {e}")
         return merged
 
-    # 🛠️ HELPER 2: Get Chapter Folder (Missing in your script)
+    # 🛠️ HELPER: Get Chapter Folder
     def get_chapter_folder(self, subject_folder_id, chap_id):
         all_folders = list_files_in_folder(subject_folder_id)
         return next((f for f in all_folders if f['name'].startswith(f"{chap_id}_")), None)
 
-    # 🛠️ CORE: Push to Firebase (Updated: No ID Logic here, just Push)
+    # 🛠️ CORE: Push to Firebase
     def push_to_firebase(self, data, subject_key, s_unit, s_chap, start_id, end_id):
         payload_str = json.dumps(data)
         compressed = COMPRESSOR.compress(payload_str.encode('utf-8'))
@@ -151,7 +151,7 @@ class AJXCourier:
         })
         log("FIREBASE", f"🔥 Synced {s_chap} (Global IDs: {start_id}-{end_id})")
 
-    # 🛠️ CORE: Sync Logic (The Brain - Reordered)
+    # 🛠️ CORE: Sync Logic (Strict Sequence)
     def sync_chapter(self, subject_key, unit_name, chapter, current_global_id):
         chap_id = chapter['id']
         chap_name = chapter['chapter']
@@ -160,7 +160,7 @@ class AJXCourier:
         subject_folder_id = find_file_by_name(subject_key, parent_id=self.masonry_root_id)
         target_folder = self.get_chapter_folder(subject_folder_id, chap_id)
         if not target_folder: 
-            return current_global_id
+            return "STOP" # Folder hi nahi hai to aage mat badho
 
         # 2. Setup Paths
         s_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
@@ -172,34 +172,58 @@ class AJXCourier:
         drive_files_map = {f['name'].upper(): f['id'] for f in drive_files_list}
         has_data_json = "DATA.JSON" in drive_files_map
         
-        # 4. Check Skip Logic
+        # 4. Check Skip Logic (SCENARIO 1: PERFECT SYNC)
         chap_meta = meta_ref.get() or {}
         is_live = db.reference(f"Syllabus/{subject_key}/Data/{s_unit}/{s_chap}/status").get() == "LIVE"
 
-        # Scenario 1: Everything Good -> Skip
         if has_data_json and is_live:
             log("SKIP", f"⏭️ {chap_name} is already LIVE. Skipping.")
+            # Return End ID so next chapter starts correctly
             return chap_meta.get("end_id", current_global_id - 1) + 1
 
-        # Scenario 2: Repair (Use Old Range)
+        # ------------------------------------------------------------------
+        # 🛑 SCENARIO 2: INCOMPLETE DATA check (STRICT STOP)
+        # ------------------------------------------------------------------
+        meta_id = drive_files_map.get("META.JSON")
+        if not meta_id:
+             log("WARNING", f"⚠️ META.JSON missing for {chap_name}. Stopping Courier.")
+             return "STOP"
+        
+        try:
+            meta_data = download_json(meta_id)
+            expected_count = meta_data.get('total_images', 0)
+            
+            # Count actual JSON parts (excluding META/DATA)
+            current_parts_count = len([k for k in drive_files_map.keys() if k.endswith('.JSON') and k not in ['META.JSON', 'DATA.JSON']])
+            
+            if current_parts_count < expected_count:
+                log("CRITICAL", f"🛑 {chap_name} Incomplete: {current_parts_count}/{expected_count} JSONs. Stopping here to preserve sequence.")
+                return "STOP" # 🔥 YAHIN RUK JAYEGA
+                
+        except Exception as e:
+            log("ERROR", f"❌ Metadata Error for {chap_name}: {e}")
+            return "STOP"
+
+        # 5. Determine ID Range
+        # SCENARIO 3: REPAIR (Drive File Missing, but ID Reserved)
         if chap_meta.get("start_id"):
             id_to_use = chap_meta["start_id"]
             log("ACCOUNTANT", f"🛠️ Repairing {chap_name} using Reserved IDs: {id_to_use}...")
             is_new_chapter = False
+        
+        # SCENARIO 4: NEW CHAPTER (Fresh Start)
         else:
-            # Scenario 3: New Chapter
             id_to_use = current_global_id
             log("ACCOUNTANT", f"🆕 Syncing New Chapter {chap_name} starting from {id_to_use}...")
             is_new_chapter = True
 
-        # 5. Merge Files
+        # 6. Merge & Inject IDs
         merged_data = self.merge_oracle_jsons(drive_files_map)
-        if not merged_data: return current_global_id
+        if not merged_data: return "STOP"
 
-        # 6. INJECT IDs (Data fixed IN MEMORY first)
         for index, mcq in enumerate(merged_data):
-            mcq['id'] = id_to_use + index      # Global ID (101, 102...)
-            mcq['local_id'] = index + 1        # Local Sequence (1, 2, 3...)
+            mcq['id'] = id_to_use + index      # Global ID
+            mcq['local_id'] = index + 1        # Local Sequence
             mcq['display_num'] = index + 1
             mcq['unit'] = unit_name.upper()
             mcq['chapter'] = chap_name.upper()
@@ -207,14 +231,10 @@ class AJXCourier:
 
         new_end_id = id_to_use + len(merged_data) - 1
 
-        # 7. Save & Push (Correct Order)
-        # A. Save Fixed Data to Drive (Now Drive has correct IDs)
+        # 7. Save & Push
         upload_json(merged_data, "DATA.JSON", target_folder['id'])
-        
-        # B. Push to Firebase
         self.push_to_firebase(merged_data, subject_key, s_unit, s_chap, id_to_use, new_end_id)
         
-        # C. Update Ledger
         meta_ref.update({
             "start_id": id_to_use,
             "end_id": new_end_id,
@@ -225,7 +245,7 @@ class AJXCourier:
         return (new_end_id + 1) if is_new_chapter else current_global_id
 
     def execute(self):
-        log("INFO", "🚀 COURIER STARTED (Self-Healing Mode)")
+        log("INFO", "🚀 COURIER STARTED (Strict Sequence Mode)")
         
         ledger_ref = db.reference("App_Settings/Accountant")
         last_global_id = (ledger_ref.get() or {}).get('last_used_id', 100)
@@ -239,17 +259,27 @@ class AJXCourier:
             
             running_global_id = last_global_id + 1
             max_id_reached = last_global_id
+            stop_signal = False # 🔥 Stop Signal Flag
 
             for unit in bp_data['structure']:
+                if stop_signal: break # Unit loop todo
                 for chap in unit['chapters']:
+                    if stop_signal: break # Chapter loop todo
+
                     # Sync Chapter
-                    next_id = self.sync_chapter(subject_key, unit['unit_name'], chap, running_global_id)
+                    result = self.sync_chapter(subject_key, unit['unit_name'], chap, running_global_id)
+                    
+                    # 🔥 HANDLE STOP SIGNAL
+                    if result == "STOP":
+                        log("WARNING", f"⛔ Sequence Halting at {chap['chapter']} due to incomplete data.")
+                        stop_signal = True
+                        break
                     
                     # Update running ID
-                    running_global_id = next_id
-                    if next_id > max_id_reached: max_id_reached = next_id - 1
+                    running_global_id = result
+                    if result > max_id_reached: max_id_reached = result - 1
 
-            # Update Global Accountant
+            # Update Global Accountant only if we progressed
             if max_id_reached > last_global_id:
                 ledger_ref.update({"last_used_id": max_id_reached})
                 log("SUCCESS", f"🎉 Accountant Updated. New High Watermark: {max_id_reached}")
