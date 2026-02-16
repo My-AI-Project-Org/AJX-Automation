@@ -98,7 +98,7 @@ def upload_json(data, filename, folder_id):
     if os.path.exists(local_path): os.remove(local_path)
 
 # ==========================================
-# 🚚 THE COURIER ENGINE
+# 🚚 THE COURIER ENGINE (FIXED & COMPLETE)
 # ==========================================
 class AJXCourier:
     def __init__(self):
@@ -108,38 +108,39 @@ class AJXCourier:
             log("CRITICAL", "Required Drive Folders not found.")
             sys.exit(1)
 
-    def push_to_firebase(self, data, subject_key, unit_name, chap_name, current_global_id):
-        """Standardized Push: Assign IDs -> Compress -> Base64 -> Firebase"""
-        start_id = current_global_id
+    # 🛠️ HELPER 1: Merge Oracle Files (Missing in your script)
+    def merge_oracle_jsons(self, drive_files_map):
+        part_files = [
+            {'name': name, 'id': fid} 
+            for name, fid in drive_files_map.items() 
+            if name.endswith('.JSON') and name not in ['META.JSON', 'DATA.JSON']
+        ]
+        # Sort by number (1.json, 2.json...)
+        part_files.sort(key=lambda x: int(re.search(r'\d+', x['name']).group()) if re.search(r'\d+', x['name']) else 0)
         
-        # 🔥 FIX 1: Use 'enumerate' to create a fresh sequence for the whole chapter
-        for index, q in enumerate(data):
-            # ✅ GLOBAL ID: Database ke liye unique key (e.g., 101, 102, 103...)
-            q['id'] = current_global_id
-            current_global_id += 1
-            
-            # ✅ LOCAL ID: Question Card ke liye sequential number (1, 2, 3...)
-            # Ye ab image change hone par reset nahi hoga.
-            new_sequence_num = index + 1
-            q['local_id'] = new_sequence_num
-            
-            # Optional: Agar Android app 'display_num' use kar raha hai to usse bhi set karein
-            q['display_num'] = new_sequence_num
+        merged = []
+        for pf in part_files:
+            try:
+                data = download_json(pf['id'])
+                if isinstance(data, list): merged.extend(data)
+            except Exception as e:
+                log("WARNING", f"Failed to merge {pf['name']}: {e}")
+        return merged
 
-            # Cleanup: Source image ka naam hata dein
-            if 'source_image' in q: del q['source_image']
-        
-        end_id = current_global_id - 1
+    # 🛠️ HELPER 2: Get Chapter Folder (Missing in your script)
+    def get_chapter_folder(self, subject_folder_id, chap_id):
+        all_folders = list_files_in_folder(subject_folder_id)
+        return next((f for f in all_folders if f['name'].startswith(f"{chap_id}_")), None)
+
+    # 🛠️ CORE: Push to Firebase (Updated: No ID Logic here, just Push)
+    def push_to_firebase(self, data, subject_key, s_unit, s_chap, start_id, end_id):
         payload_str = json.dumps(data)
         compressed = COMPRESSOR.compress(payload_str.encode('utf-8'))
         b64_payload = base64.b64encode(compressed).decode('utf-8')
         md5_hash = hashlib.md5(b64_payload.encode()).hexdigest()
 
-        # 🔥 FIX 2: Python mein .trim() nahi hota, .strip() use karein
-        safe_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
-        safe_chap = chap_name.replace(".", "").replace("/", "_").upper().strip()
-        ref_path = f"Syllabus/{subject_key}/Data/{safe_unit}/{safe_chap}"
-
+        ref_path = f"Syllabus/{subject_key}/Data/{s_unit}/{s_chap}"
+        
         db.reference(ref_path).set({
             "status": "LIVE",
             "payload": b64_payload,
@@ -148,70 +149,72 @@ class AJXCourier:
             "id_range": f"{start_id}-{end_id}",
             "last_updated": int(time.time())
         })
-        # Log message update kiya taaki clear ho ki local ID 1 se shuru ho rahi hai
-        log("FIREBASE", f"🔥 Synced {chap_name} (Global IDs: {start_id}-{end_id} | Local IDs: 1-{len(data)})")
-        return current_global_id
+        log("FIREBASE", f"🔥 Synced {s_chap} (Global IDs: {start_id}-{end_id})")
 
+    # 🛠️ CORE: Sync Logic (The Brain - Reordered)
     def sync_chapter(self, subject_key, unit_name, chapter, current_global_id):
         chap_id = chapter['id']
         chap_name = chapter['chapter']
         
-        # 🟢 PRE-SYNC AUDIT (Drive + Firebase)
+        # 1. Access Folder
         subject_folder_id = find_file_by_name(subject_key, parent_id=self.masonry_root_id)
         target_folder = self.get_chapter_folder(subject_folder_id, chap_id)
-        if not target_folder: return current_global_id # Skip if folder missing
+        if not target_folder: 
+            return current_global_id
 
-        # Chapter-wise Ledger Path in Firebase
+        # 2. Setup Paths
         s_unit = unit_name.replace(".", "").replace("/", "_").upper().strip()
         s_chap = chap_name.replace(".", "").replace("/", "_").upper().strip()
         meta_ref = db.reference(f"Syllabus/{subject_key}/Metadata/{s_unit}/{s_chap}")
         
-        # Drive Files Audit
-        drive_files = {f['name'].upper(): f['id'] for f in list_files_in_folder(target_folder['id'])}
-        has_data_json = "DATA.JSON" in drive_files
+        # 3. Audit Files
+        drive_files_list = list_files_in_folder(target_folder['id'])
+        drive_files_map = {f['name'].upper(): f['id'] for f in drive_files_list}
+        has_data_json = "DATA.JSON" in drive_files_map
         
-        # Firebase Metadata Audit
+        # 4. Check Skip Logic
         chap_meta = meta_ref.get() or {}
         is_live = db.reference(f"Syllabus/{subject_key}/Data/{s_unit}/{s_chap}/status").get() == "LIVE"
 
-        # --- 🔥 SCENARIO 1: SKIP LOGIC (Perfect Sync) ---
+        # Scenario 1: Everything Good -> Skip
         if has_data_json and is_live:
-            log("SKIP", f"⏭️ {chap_name} is already healthy and LIVE. Skipping.")
+            log("SKIP", f"⏭️ {chap_name} is already LIVE. Skipping.")
             return chap_meta.get("end_id", current_global_id - 1) + 1
 
-        # --- 🔥 SCENARIO 2: REPAIR LOGIC (Drive File Missing but Range Reserved) ---
+        # Scenario 2: Repair (Use Old Range)
         if chap_meta.get("start_id"):
-            log("WARNING", f"🛠️ Repairing {chap_name}. Re-using reserved Global IDs: {chap_meta['start_id']} onwards.")
             id_to_use = chap_meta["start_id"]
+            log("ACCOUNTANT", f"🛠️ Repairing {chap_name} using Reserved IDs: {id_to_use}...")
             is_new_chapter = False
         else:
-            # --- 🔥 SCENARIO 3: NEW CHAPTER (Normal Flow) ---
+            # Scenario 3: New Chapter
             id_to_use = current_global_id
+            log("ACCOUNTANT", f"🆕 Syncing New Chapter {chap_name} starting from {id_to_use}...")
             is_new_chapter = True
-            log("ACCOUNTANT", f"🆕 First time sync for {chap_name}. Starting Global ID: {id_to_use}")
 
-        # --- CORE SYNC PROCESS ---
-        merged_data = self.merge_oracle_jsons(drive_files) # Image 1.json, 2.json merge karega
+        # 5. Merge Files
+        merged_data = self.merge_oracle_jsons(drive_files_map)
         if not merged_data: return current_global_id
 
-        # ID INJECTION (The Brains)
+        # 6. INJECT IDs (Data fixed IN MEMORY first)
         for index, mcq in enumerate(merged_data):
-            mcq['id'] = id_to_use + index       # Global Unique ID
-            mcq['local_id'] = index + 1        # Card Sequence (1, 2, 3...)
+            mcq['id'] = id_to_use + index      # Global ID (101, 102...)
+            mcq['local_id'] = index + 1        # Local Sequence (1, 2, 3...)
             mcq['display_num'] = index + 1
             mcq['unit'] = unit_name.upper()
             mcq['chapter'] = chap_name.upper()
+            if 'source_image' in mcq: del mcq['source_image']
 
-        # Update Accountant/Metadata
         new_end_id = id_to_use + len(merged_data) - 1
-        
-        # Save to Drive (Backup)
+
+        # 7. Save & Push (Correct Order)
+        # A. Save Fixed Data to Drive (Now Drive has correct IDs)
         upload_json(merged_data, "DATA.JSON", target_folder['id'])
         
-        # Save to Firebase
+        # B. Push to Firebase
         self.push_to_firebase(merged_data, subject_key, s_unit, s_chap, id_to_use, new_end_id)
         
-        # Save Chapter Ledger (Range Reservation)
+        # C. Update Ledger
         meta_ref.update({
             "start_id": id_to_use,
             "end_id": new_end_id,
@@ -219,17 +222,13 @@ class AJXCourier:
             "count": len(merged_data)
         })
 
-        # Agar naya chapter tha, toh Global Accountant badhao
         return (new_end_id + 1) if is_new_chapter else current_global_id
 
     def execute(self):
-        log("INFO", "🚀 COURIER STARTED (Sequential Mode)")
+        log("INFO", "🚀 COURIER STARTED (Self-Healing Mode)")
         
-        # 🟢 GLOBAL ACCOUNTANT (Starts from 101)
         ledger_ref = db.reference("App_Settings/Accountant")
-        last_used_id = (ledger_ref.get() or {}).get('last_used_id', 100)
-        current_global_id = last_used_id + 1
-        log("ACCOUNTANT", f"💰 Starting from Global ID: {current_global_id}")
+        last_global_id = (ledger_ref.get() or {}).get('last_used_id', 100)
 
         blueprints = list_files_in_folder(self.bp_folder_id)
         for bp in blueprints:
@@ -238,33 +237,22 @@ class AJXCourier:
             bp_data = download_json(bp['id'])
             subject_key = bp_data['meta']['subject_key']
             
-            stop_signal = False
-            processed_any = False
+            running_global_id = last_global_id + 1
+            max_id_reached = last_global_id
 
-            # Strict Sequential Loop
             for unit in bp_data['structure']:
-                if stop_signal: break
                 for chap in unit['chapters']:
-                    if stop_signal: break
+                    # Sync Chapter
+                    next_id = self.sync_chapter(subject_key, unit['unit_name'], chap, running_global_id)
                     
-                    s_unit = unit['unit_name'].replace(".", "").replace("/", "_").upper().strip()
-                    s_chap = chap['chapter'].replace(".", "").replace("/", "_").upper().strip()
-                    status = db.reference(f"Syllabus/{subject_key}/Data/{s_unit}/{s_chap}/status").get()
-                    
-                    if status == "LIVE": continue
-                    
-                    new_id = self.sync_chapter(subject_key, unit['unit_name'], chap, current_global_id)
-                    
-                    if new_id == "STOP":
-                        stop_signal = True
-                    elif isinstance(new_id, int):
-                        current_global_id = new_id
-                        processed_any = True
-                        # Update Accountant immediately for safety
-                        ledger_ref.update({"last_used_id": current_global_id - 1})
+                    # Update running ID
+                    running_global_id = next_id
+                    if next_id > max_id_reached: max_id_reached = next_id - 1
 
-            if processed_any:
-                log("SUCCESS", f"🎉 {subject_key} Synced! Last ID: {current_global_id - 1}")
+            # Update Global Accountant
+            if max_id_reached > last_global_id:
+                ledger_ref.update({"last_used_id": max_id_reached})
+                log("SUCCESS", f"🎉 Accountant Updated. New High Watermark: {max_id_reached}")
 
 if __name__ == "__main__":
     AJXCourier().execute()
