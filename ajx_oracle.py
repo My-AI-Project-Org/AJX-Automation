@@ -13,6 +13,8 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from googleapiclient.errors import HttpError
+# Top imports ke saath ye jod lein
+from google.api_core.exceptions import ResourceExhausted
 
 # ==========================================
 # ⚙️ CONFIGURATION
@@ -27,7 +29,7 @@ def log(level, msg):
         "ERROR": "❌", "CRITICAL": "💀", "ORACLE": "🔮", 
         "SKIP": "⏭️", "GEMINI": "✨"
     }
-    print(f"{icons.get(level, '')} [{level}] {msg}")
+    print(f"{icons.get(level, '')} [{level}] {msg}",flush=True)
 
 # ==========================================
 # 🔐 AUTHENTICATION & DRIVE SETUP
@@ -213,16 +215,23 @@ class AJXOracle:
             success = False
             
             while retries < MAX_RETRIES:
+                # 🔥 FIX: Agar keys khatam ho gayi to loop tod do
+                if not self.my_keys:
+                    log("CRITICAL", "❌ All API Keys exhausted for this worker!")
+                    break
+
+                # 🔥 FIX: Current Key ko variable me lo taaki remove kar sako
+                current_api_key = self.get_random_key()
+
                 try:
-                    # Configure Gemini
-                    api_key = self.get_random_key()
-                    genai.configure(api_key=api_key)
-                    model = genai.GenerativeModel('gemini-2.5-flash')
+                    # Configure Gemini with specific key
+                    genai.configure(api_key=current_api_key)
+                    model = genai.GenerativeModel('gemini-2.0-flash') # Model name verify kr lena
                     
                     # Upload to Gemini (Temp)
                     sample_file = genai.upload_file(path=img_name, display_name=img_name)
                     
-                    # 🔥 CONTEXT INJECTION
+                    # Context Injection
                     dynamic_prompt = (
                         f"{self.master_prompt}\n\n"
                         f"--- CONTEXT INFO ---\n"
@@ -239,19 +248,26 @@ class AJXOracle:
                     data = recursive_repair(response.text)
                     
                     if data:
-                        # 🛠️ Assign Local IDs
+                        # Assign IDs & Save
                         for idx, q in enumerate(data):
                             q['local_id'] = idx + 1
                             q['source_image'] = img_name
                         
-                        # C. Upload Result
                         if upload_json(data, json_target, folder_id):
-                            # 👇👇👇 UPDATED LINE IS HERE 👇👇👇
                             log("SUCCESS", f"✅ Generated {json_target} (Contains {len(data)} MCQs)")
                             success = True
-                            break
+                            break # Kaam ho gaya, loop todo
                     else:
                         raise Exception("Gemini returned invalid/unrepairable JSON")
+
+                # 🔥 SMART ROTATION CATCH BLOCK
+                except ResourceExhausted:
+                    log("WARNING", f"⚠️ Quota Exceeded for key ...{current_api_key[-5:]}. Removing from pool.")
+                    # Is key ko list se nikaal do taaki dobara select na ho
+                    if current_api_key in self.my_keys:
+                        self.my_keys.remove(current_api_key)
+                    # Retry count mat badhao, turant nayi key try karo
+                    continue 
 
                 except Exception as e:
                     log("WARNING", f"Retry {retries+1}/{MAX_RETRIES} for {img_name}: {e}")
