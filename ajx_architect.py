@@ -24,7 +24,7 @@ SCOPES = ['https://www.googleapis.com/auth/drive']
 def log(level, msg):
     """Custom Logger"""
     icons = {"INFO": "ℹ️", "SUCCESS": "✅", "WARNING": "⚠️", "ERROR": "❌", "CRITICAL": "💀", "DSA": "🧮"}
-    print(f"{icons.get(level, '')} [{level}] {msg}")
+    print(f"{icons.get(level, '')} [{level}] {msg}",flush=True)
 
 # ==========================================
 # 🔐 AUTHENTICATION (HUMAN PRIORITY)
