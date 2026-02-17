@@ -168,44 +168,72 @@ class AJXOracle:
         return random.choice(self.my_keys)
 
     def process_chapter(self, folder_name, folder_id, meta_data):
-        """Processes images in a specific chapter folder"""
         log("ORACLE", f"📂 Scanning Chapter: {folder_name}")
         
-        # 1. Audit: List all files
+        # 1. Audit Files (Saari files ki list lo)
         files = list_files_in_folder(folder_id)
         file_map = {f['name']: f['id'] for f in files}
         
-        # 2. Identify Pending Work
+        # Create Case-Insensitive Map (Comparison ke liye)
+        existing_files_upper = {f['name'].upper(): f['id'] for f in files}
+
+        # -----------------------------------------------------
+        # 🕵️‍♂️ STEP 1: SMART AUDIT (Double Verification)
+        # -----------------------------------------------------
         pending_images = []
         for name, fid in file_map.items():
-            if name.endswith(".jpg"):
-                json_name = name.replace(".jpg", ".JSON").replace(".JPG", ".JSON")
+            # Check karo agar ye Image hai
+            if name.lower().endswith(('.jpg', '.jpeg', '.png')):
                 
-                # 🔥 SKIP LOGIC: If JSON exists, don't redo it
-                if json_name in file_map: 
-                    continue 
+                # Expected JSON ka naam banao (e.g., "1.jpg" -> "1.json")
+                base_name = name.rsplit('.', 1)[0]
+                expected_json_name = f"{base_name}.json"
                 
-                pending_images.append({'name': name, 'id': fid})
-        
-        # Sort nicely (1.jpg, 2.jpg... 10.jpg)
+                # Check karo: Kya iska JSON exist karta hai? (Case Insensitive)
+                if expected_json_name.upper() in existing_files_upper:
+                    continue # ✅ Han hai, is image ko Skip karo.
+                else:
+                    # ❌ Nahi hai, isko list me daalo processing ke liye.
+                    pending_images.append({'name': name, 'id': fid})
+
+        # Sort Logic (Taaki sequence 1, 2, 3... rahe)
         try: pending_images.sort(key=lambda x: int(re.search(r'\d+', x['name']).group()))
         except: pending_images.sort(key=lambda x: x['name'])
 
+        # -----------------------------------------------------
+        # 🗑️ STEP 2: CORRUPT DATA CLEANUP (Self-Healing)
+        # -----------------------------------------------------
         if not pending_images:
-            log("SKIP", f"⏭️ {folder_name} is Complete (All JSONs exist).")
+            # Case A: Sab kuch complete hai
+            log("SKIP", f"⏭️ {folder_name} is 100% Complete. No missing JSONs.")
             return
+        else:
+            # Case B: Kuch JSONs missing hain
+            log("INFO", f"⚙️ Found {len(pending_images)} missing JSONs in {folder_name}. Processing...")
+            
+            # Agar parts missing hain, par 'DATA.JSON' (Final file) wahan padi hai,
+            # toh wo DATA.JSON jhootha/adhura hai. Usse DELETE karo.
+            data_json_id = existing_files_upper.get("DATA.JSON")
+            if data_json_id:
+                log("DELETE", f"🗑️ Incomplete Folder detected! Deleting invalid DATA.JSON for {folder_name}...")
+                try:
+                    service.files().delete(fileId=data_json_id).execute()
+                except Exception as e:
+                    log("WARNING", f"Could not delete DATA.JSON: {e}")
 
-        log("INFO", f"⚙️ Found {len(pending_images)} pending images in {folder_name}")
-
-        # 3. Process Loop
+        # -----------------------------------------------------
+        # 🛠️ STEP 3: EXECUTION LOOP (Images Processing)
+        # -----------------------------------------------------
         for img_item in pending_images:
+            # ... (Iske niche ka code same rahega) ...
             img_name = img_item['name']
             img_id = img_item['id']
-            json_target = img_name.replace(".jpg", ".json")
+            json_target = img_name.rsplit('.', 1)[0] + ".json"
             
-            # Derive Page Number for Context
             try: page_num = int(re.search(r'\d+', img_name).group())
             except: page_num = 1
+            
+            # ... (Yahan se aapka Gemini API call shuru hoga) ...
 
             log("GEMINI", f"✨ Processing {img_name}...")
             
