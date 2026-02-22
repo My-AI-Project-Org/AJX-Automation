@@ -151,17 +151,6 @@ class AJXOracle:
         
         log("ORACLE", f"Worker {shard_index+1}/{total_shards} loaded {len(self.my_keys)} API Keys.")
 
-        # 2. Fetch Master Prompt from Drive
-        self.master_prompt = "Generate MCQs from this image in JSON format." # Default safety
-        prompt_id = find_file_by_name("MASTER_PROMPT.txt")
-        
-        if prompt_id:
-            download_file(prompt_id, "MASTER_PROMPT.txt")
-            with open("MASTER_PROMPT.txt", "r", encoding="utf-8") as f:
-                self.master_prompt = f.read()
-            log("SUCCESS", "📜 Master Prompt Loaded from Drive.")
-        else:
-            log("WARNING", "⚠️ MASTER_PROMPT.txt not found in Root. Using Default.")
 
     def get_random_key(self):
         """Rotates keys to avoid Rate Limits"""
@@ -176,6 +165,78 @@ class AJXOracle:
         
         # Create Case-Insensitive Map (Comparison ke liye)
         existing_files_upper = {f['name'].upper(): f['id'] for f in files}
+
+        # =====================================================
+        # 🔥 NAYA LOGIC: METHOD 2 BYPASS (DIRECT TEXT TO MCQ)
+        # =====================================================
+        if meta_data.get('mode') == "METHOD_2":
+            if "1.JSON" in existing_files_upper:
+                log("SKIP", f"⏭️ {folder_name} is already generated (Method 2).")
+                return
+
+            log("GEMINI", f"✨ Processing Direct Text Generation for {folder_name}...")
+            
+            target_mcqs = meta_data.get("target_mcqs", 50)
+            context = meta_data.get("subtopic_context", "")
+            
+            dynamic_prompt = (
+                f"{meta_data.get('master_prompt', 'Generate MCQs in JSON format.')}\n\n"
+                f"--- CONTEXT INFO ---\n"
+                f"Subject: {meta_data['subject_key']}\n"
+                f"Chapter: {folder_name}\n"
+                f"Subtopic Details to Cover: {context}\n"
+                f"Target Number of MCQs: {target_mcqs}\n"
+                f"IMPORTANT: Generate exactly {target_mcqs} questions based ONLY on the subtopic details. Return ONLY valid JSON."
+            )
+            
+            retries = 0
+            while retries < MAX_RETRIES:
+                if not self.my_keys:
+                    log("CRITICAL", "❌ All API Keys exhausted for this worker!")
+                    break
+
+                current_api_key = self.get_random_key()
+                try:
+                    genai.configure(api_key=current_api_key)
+                    # 🔥 NAYA: Advanced Generation Config (Tokens & Strictness)
+                    generation_config = {
+                        "temperature": 0.4, 
+                        "top_p": 1, 
+                        "top_k": 1, 
+                        "max_output_tokens": 16384
+                    }
+                    model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
+                    
+                    # 🔥 No Image, Only Prompt passed to Gemini
+                    response = model.generate_content(dynamic_prompt)
+                    data = recursive_repair(response.text)
+                    
+                    if data:
+                        for idx, q in enumerate(data):
+                            q['local_id'] = idx + 1
+                            q['source_image'] = "SYLLABUS_DB" # Method 2 indicator
+                        
+                        if upload_json(data, "1.json", folder_id):
+                            log("SUCCESS", f"✅ Generated 1.json (Contains {len(data)} MCQs)")
+                            return # ✅ Kaam ho gaya, return kar jao
+                    else:
+                        raise Exception("Gemini returned invalid JSON")
+
+                except ResourceExhausted:
+                    log("WARNING", f"⚠️ Quota Exceeded for key ...{current_api_key[-5:]}. Removing from pool.")
+                    if current_api_key in self.my_keys: self.my_keys.remove(current_api_key)
+                    remaining = len(self.my_keys)
+                    used = self.initial_count - remaining
+                    log("ACCOUNTANT", f"📉 STATUS: Used {used} | Remaining {remaining}")
+                    continue 
+
+                except Exception as e:
+                    log("WARNING", f"Retry {retries+1}/{MAX_RETRIES} for Method 2: {e}")
+                    retries += 1
+                    time.sleep(5)
+            
+            log("ERROR", f"❌ Failed to process Method 2 for {folder_name}.")
+            return
 
         # -----------------------------------------------------
         # 🕵️‍♂️ STEP 1: SMART AUDIT (Double Verification)
@@ -255,7 +316,14 @@ class AJXOracle:
                 try:
                     # Configure Gemini with specific key
                     genai.configure(api_key=current_api_key)
-                    model = genai.GenerativeModel('gemini-2.5-flash') # Model name verify kr lena
+                    # 🔥 NAYA: Advanced Generation Config (Tokens & Strictness)
+                    generation_config = {
+                        "temperature": 0.4, 
+                        "top_p": 1, 
+                        "top_k": 1, 
+                        "max_output_tokens": 16384
+                    }
+                    model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
                     
                     # Upload to Gemini (Temp)
                     sample_file = genai.upload_file(path=img_name, display_name=img_name)
@@ -330,11 +398,37 @@ class AJXOracle:
         for bp in blueprints:
             if not bp['name'].endswith("_BLUEPRINT.json"): continue
             
-            # Download & Read Blueprint
+           # Download & Read Blueprint
             download_file(bp['id'], "blueprint.json")
             with open("blueprint.json", "r") as f: data = json.load(f)
             
             subject_key = data['meta']['subject_key']
+            # 🔥 NAYA LOGIC: Blueprint se 'mode' nikaalo (e.g. METHOD_1 or METHOD_2)
+            method_type = data['meta'].get('mode', 'METHOD_1') 
+
+            # =========================================================
+            # 🔥 NAYA LOGIC: Dynamic Path for MASTER_PROMPT.txt
+            # =========================================================
+            custom_prompt = "Generate MCQs from this content in JSON format." # Default
+            input_root_id = find_file_by_name("00_Input")
+            if input_root_id:
+                subject_input_folder_id = find_file_by_name(subject_key, parent_id=input_root_id)
+                if subject_input_folder_id:
+                    files_in_input = list_files_in_folder(subject_input_folder_id)
+                    prompt_file_id = next((f['id'] for f in files_in_input if f['name'].upper() == "MASTER_PROMPT.TXT"), None)
+                    
+                    if prompt_file_id:
+                        download_file(prompt_file_id, "temp_prompt.txt")
+                        try:
+                            with open("temp_prompt.txt", "r", encoding="utf-8") as f:
+                                custom_prompt = f.read()
+                            log("SUCCESS", f"📜 Master Prompt Loaded directly from 00_Input/{subject_key}")
+                        except Exception as e:
+                            log("WARNING", f"⚠️ Failed to read prompt: {e}")
+                        finally:
+                            if os.path.exists("temp_prompt.txt"): os.remove("temp_prompt.txt")
+                    else:
+                        log("WARNING", f"⚠️ MASTER_PROMPT.txt not found in 00_Input/{subject_key}. Using default.")
             
             # 2. Find Subject Folder in Masonry
             masonry_root = find_file_by_name("02_Masonry")
@@ -348,8 +442,10 @@ class AJXOracle:
             flat_chapters = []
             for unit in data['structure']:
                 for chap in unit['chapters']:
-                    # Pass extra context needed for Prompt
+                    # Pass extra context needed for Prompt and Logic
                     chap['subject_key'] = subject_key
+                    chap['mode'] = method_type  # 🔥 Method 1 ya 2 batane ke liye
+                    chap['master_prompt'] = custom_prompt  # 🔥 NAYA: Worker ko prompt pass kar diya
                     flat_chapters.append(chap)
             
             # Optimization: Load Subject Folder Listing ONCE to find IDs
