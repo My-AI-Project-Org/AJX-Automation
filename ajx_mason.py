@@ -202,7 +202,7 @@ class AJXMason:
                 "unit": unit_name,
                 "subject": subject_key,
                 "mode": "METHOD_2",
-                "target_mcqs": chapter.get("target_mcqs", 50),
+                "target_mcqs": chapter.get("target_mcqs", 100),
                 "subtopic_context": chapter.get("subtopic_context", "")
             }
             
