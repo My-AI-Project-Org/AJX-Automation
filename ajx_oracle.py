@@ -167,7 +167,7 @@ class AJXOracle:
         existing_files_upper = {f['name'].upper(): f['id'] for f in files}
 
         # =====================================================
-        # 🔥 NAYA LOGIC: METHOD 2 BYPASS (DIRECT TEXT TO MCQ)
+        # 🔥 NAYA LOGIC: METHOD 2 BYPASS (SMART CHUNKING ENGINE)
         # =====================================================
         if meta_data.get('mode') == "METHOD_2":
             if "1.JSON" in existing_files_upper:
@@ -176,21 +176,41 @@ class AJXOracle:
 
             log("GEMINI", f"✨ Processing Direct Text Generation for {folder_name}...")
             
-            target_mcqs = meta_data.get("target_mcqs", 50)
+            total_target = meta_data.get("target_mcqs", 50)
             context = meta_data.get("subtopic_context", "")
+            master_prompt = meta_data.get('master_prompt', 'Generate MCQs in JSON format.')
             
-            dynamic_prompt = (
-                f"{meta_data.get('master_prompt', 'Generate MCQs in JSON format.')}\n\n"
-                f"--- CONTEXT INFO ---\n"
-                f"Subject: {meta_data['subject_key']}\n"
-                f"Chapter: {folder_name}\n"
-                f"Subtopic Details to Cover: {context}\n"
-                f"Target Number of MCQs: {target_mcqs}\n"
-                f"IMPORTANT: Generate exactly {target_mcqs} questions based ONLY on the subtopic details. Return ONLY valid JSON."
-            )
+            # 🔥 NAYA: Chunking Variables
+            CHUNK_SIZE = 25 # Ek baar mein sirf 25 questions mangega
+            all_generated_mcqs = []
+            remaining_mcqs = total_target
             
+            log("INFO", f"🎯 Target: {total_target} MCQs. Chunking by {CHUNK_SIZE}...")
+
             retries = 0
-            while retries < MAX_RETRIES:
+            while remaining_mcqs > 0 and retries < MAX_RETRIES:
+                current_batch = min(CHUNK_SIZE, remaining_mcqs)
+                
+                # 🔥 SMART MEMORY: Purane questions yaad dilao taaki repeat na kare
+                avoid_text = ""
+                if all_generated_mcqs:
+                    existing_qs = [f"- {q.get('question', '')[:60]}..." for q in all_generated_mcqs]
+                    avoid_text = (
+                        f"\n\nCRITICAL AVOIDANCE RULE: You have already generated {len(all_generated_mcqs)} questions for this topic. "
+                        f"DO NOT repeat the concepts from these questions:\n" + "\n".join(existing_qs)
+                    )
+
+                dynamic_prompt = (
+                    f"{master_prompt}\n\n"
+                    f"--- CONTEXT INFO ---\n"
+                    f"Subject: {meta_data['subject_key']}\n"
+                    f"Chapter: {folder_name}\n"
+                    f"Subtopic Details to Cover: {context}\n"
+                    f"Target Number of MCQs for this batch: {current_batch}\n"
+                    f"{avoid_text}\n"
+                    f"IMPORTANT: Generate exactly {current_batch} new questions. Return ONLY valid JSON."
+                )
+                
                 if not self.my_keys:
                     log("CRITICAL", "❌ All API Keys exhausted for this worker!")
                     break
@@ -198,7 +218,6 @@ class AJXOracle:
                 current_api_key = self.get_random_key()
                 try:
                     genai.configure(api_key=current_api_key)
-                    # 🔥 NAYA: Advanced Generation Config (Tokens & Strictness)
                     generation_config = {
                         "temperature": 0.4, 
                         "top_p": 1, 
@@ -207,20 +226,19 @@ class AJXOracle:
                     }
                     model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config)
                     
-                    # 🔥 No Image, Only Prompt passed to Gemini
+                    log("GEMINI", f"⏳ Generating chunk of {current_batch} MCQs... (Remaining: {remaining_mcqs})")
                     response = model.generate_content(dynamic_prompt)
                     data = recursive_repair(response.text)
                     
-                    if data:
-                        for idx, q in enumerate(data):
-                            q['local_id'] = idx + 1
-                            q['source_image'] = "SYLLABUS_DB" # Method 2 indicator
-                        
-                        if upload_json(data, "1.json", folder_id):
-                            log("SUCCESS", f"✅ Generated 1.json (Contains {len(data)} MCQs)")
-                            return # ✅ Kaam ho gaya, return kar jao
+                    # Agar valid list mili
+                    if data and isinstance(data, list) and len(data) > 0:
+                        all_generated_mcqs.extend(data)
+                        # Jitne actual banaye, utne minus karo
+                        remaining_mcqs -= len(data) 
+                        retries = 0 # Agle chunk ke liye retries reset
+                        log("SUCCESS", f"✅ Chunk Success! Got {len(data)} MCQs. Total so far: {len(all_generated_mcqs)}/{total_target}")
                     else:
-                        raise Exception("Gemini returned invalid JSON")
+                        raise Exception("Gemini returned invalid JSON or Empty List")
 
                 except ResourceExhausted:
                     log("WARNING", f"⚠️ Quota Exceeded for key ...{current_api_key[-5:]}. Removing from pool.")
@@ -231,12 +249,23 @@ class AJXOracle:
                     continue 
 
                 except Exception as e:
-                    log("WARNING", f"Retry {retries+1}/{MAX_RETRIES} for Method 2: {e}")
+                    log("WARNING", f"Retry {retries+1}/{MAX_RETRIES} for chunk: {e}")
                     retries += 1
                     time.sleep(5)
             
-            log("ERROR", f"❌ Failed to process Method 2 for {folder_name}.")
-            return
+            # 🔥 LOOP KHATAM: Ab saare chunks ko milakar ek single file banao
+            if all_generated_mcqs:
+                # Sequence mein 1 se lekar 80 (ya target) tak IDs set karo
+                for idx, q in enumerate(all_generated_mcqs):
+                    q['local_id'] = idx + 1
+                    q['source_image'] = "SYLLABUS_DB"
+                
+                if upload_json(all_generated_mcqs, "1.json", folder_id):
+                    log("SUCCESS", f"🎉 METHOD 2 COMPLETE! Uploaded 1.json with total {len(all_generated_mcqs)} MCQs.")
+                    return
+            else:
+                log("ERROR", f"❌ Failed to generate any MCQs for {folder_name}.")
+                return
 
         # -----------------------------------------------------
         # 🕵️‍♂️ STEP 1: SMART AUDIT (Double Verification)
