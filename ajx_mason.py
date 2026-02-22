@@ -189,6 +189,34 @@ class AJXMason:
         if os.path.exists(local_chap_dir): shutil.rmtree(local_chap_dir)
         os.makedirs(local_chap_dir, exist_ok=True)
 
+        # 🔥 NAYA LOGIC: METHOD 2 SHORT-CIRCUIT 🔥
+        method_type = task_data.get('method_type', 'METHOD_1')
+        if method_type == "METHOD_2":
+            log("MASON", f"🧱 Building Empty Skeleton for {folder_name} (Method 2)")
+            chap_drive_id = create_folder(folder_name, subject_folder_id)
+            
+            # Method 2 ka special meta.json
+            meta_data = {
+                "chapter_id": chap_id,
+                "chapter_name": chap_name,
+                "unit": unit_name,
+                "subject": subject_key,
+                "mode": "METHOD_2",
+                "target_mcqs": chapter.get("target_mcqs", 50),
+                "subtopic_context": chapter.get("subtopic_context", "")
+            }
+            
+            meta_path = os.path.join(local_chap_dir, "meta.json")
+            with open(meta_path, "w") as f: json.dump(meta_data, f, indent=4)
+            
+            upload_file(meta_path, chap_drive_id, 'application/json')
+            log("SUCCESS", f"✅ Created Skeleton & Meta for {folder_name}")
+            
+            try: shutil.rmtree(local_chap_dir)
+            except: pass
+            return folder_name
+        # 🔥 NAYA LOGIC END 🔥
+
         doc = None
         generated_files = []
         try:
@@ -270,6 +298,7 @@ class AJXMason:
         
         meta = blueprint.get('meta', {})
         subject_key = meta.get('subject_key')
+        method_type = meta.get('mode', 'METHOD_1') # 🔥 Naya: Mode pehchano
         pdf_id = meta.get('main_pdf_id')
         structure = blueprint.get('structure', [])
 
@@ -311,7 +340,12 @@ class AJXMason:
             end_p = chapter.get('end_p', 1)
             safe_chap_name = self.clean_filename(chap_name)
             folder_name = f"{chap_id}_{safe_chap_name}"
-            expected_count = (end_p - start_p) + 2
+            
+            # 🔥 NAYA: Expected count Method ke hisaab se
+            if method_type == "METHOD_1":
+                expected_count = (end_p - start_p) + 2
+            else:
+                expected_count = 1 # Method 2 mein sirf 1 meta.json banega
 
             if folder_name in existing_folders_map:
                 folder_id = existing_folders_map[folder_name]
@@ -324,21 +358,25 @@ class AJXMason:
                     log("WARNING", f"⚠️ CORRUPTED: {folder_name}. Retrying...")
                     delete_file(folder_id)
             
-            needs_pdf = True
+            if method_type == "METHOD_1": needs_pdf = True
+            
             tasks.append({
                 "chapter": chapter,
                 "unit_name": unit['unit_name'],
                 "subject_key": subject_key,
                 "subject_folder_id": subject_folder_id,
-                "global_offset": global_offset # PASS OFFSET TO WORKER
+                "global_offset": global_offset,
+                "method_type": method_type # 🔥 NAYA: Worker ko method batao
             })
 
         if not tasks:
             log("INFO", f"Shard {shard_index+1}: No pending tasks.")
             return
 
-        log("INFO", f"⬇️ Downloading PDF...")
-        if needs_pdf: download_file(pdf_id, "source.pdf")
+        # 🔥 NAYA: Sirf Method 1 ke liye PDF download karo
+        if needs_pdf and pdf_id: 
+            log("INFO", f"⬇️ Downloading PDF...")
+            download_file(pdf_id, "source.pdf")
 
         log("MASON", f"🚀 Shard {shard_index+1} starting {len(tasks)} chapters...")
 
