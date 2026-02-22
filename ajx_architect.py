@@ -233,23 +233,24 @@ class AJXArchitect:
             return []
 
     def process_db_method_2(self, db_data):
-        """METHOD 2: Database Conversion"""
+        """METHOD 2: Database Conversion (Flat Blueprint Structure)"""
         log("INFO", "Method 2 Detected: Converting DB to Skeleton...")
         grouped = {}
         for item in db_data:
             unit_key = item.get('chapter', 'General Module')
             topic_name = item.get('topic', 'General Topic')
             
-            if unit_key not in grouped: grouped[unit_key] = []
+            if unit_key not in grouped: 
+                grouped[unit_key] = []
             
+            # 🚀 NAYA LOGIC: 'method_2_meta' hata diya, direct keys use kiye hain
             grouped[unit_key].append({
                 "chapter": topic_name,
-                "method_2_meta": {
-                    "subtopic": item.get('subtopic', ''),
-                    "num_questions": item.get('num_questions', 5),
-                    "format": item.get('format', 'Standard')
-                }
+                "subtopic_context": item.get('subtopic', ''),
+                "target_mcqs": item.get('num_questions', 100), # Default 5 se 50 kar diya realistic logic ke liye
+                "format": item.get('format', 'Standard')
             })
+            
         return [{"unit_name": k, "chapters": v} for k, v in grouped.items()]
 
     def generate_ids_and_paths(self, structure, subject_key):
@@ -296,21 +297,32 @@ class AJXArchitect:
             subject_key = self.clean_filename(raw_subject_name)
             log("INFO", f"📂 Processing Subject: {raw_subject_name} -> {subject_key}")
             
-            # 1. FIND SOURCE PDF
+            # 1. DETECT METHOD & FILES
             files = list_files_in_folder(folder['id'])
-            file_map = {f['name']: f['id'] for f in files}
+            # UPPERCASE map for safety (syllabus_db.json ya SYLLABUS_DB.JSON sab pakad lega)
+            file_map = {f['name'].upper(): f['id'] for f in files} 
             
+            method_type = "UNKNOWN"
             main_pdf_id = None
-            pdf_name = f"{raw_subject_name}.pdf"
-            if pdf_name in file_map: main_pdf_id = file_map[pdf_name]
-            else:
-                for f in files:
-                    if f['name'].endswith('.pdf') and 'index' not in f['name'].lower():
-                        main_pdf_id = f['id']; break
             
-            if not main_pdf_id:
-                log("WARNING", f"Skipping {subject_key}: No Source PDF found.")
-                continue
+            # Identify Method
+            if 'SYLLABUS_DB.JSON' in file_map: 
+                method_type = "METHOD_2"
+            elif any(f.endswith('INDEX.PDF') for f in file_map): 
+                method_type = "METHOD_1"
+                
+            # If Method 1, we strictly need a Main PDF
+            if method_type == "METHOD_1":
+                pdf_name = f"{raw_subject_name}.PDF".upper()
+                if pdf_name in file_map: main_pdf_id = file_map[pdf_name]
+                else:
+                    for name, fid in file_map.items():
+                        if name.endswith('.PDF') and 'INDEX' not in name:
+                            main_pdf_id = fid; break
+                
+                if not main_pdf_id:
+                    log("WARNING", f"Skipping {subject_key}: No Source PDF found for Method 1.")
+                    continue
 
             # =========================================================
             # 🛡️ DOUBLE CONFIRMATION LOGIC (Drive + Firebase)
@@ -331,69 +343,77 @@ class AJXArchitect:
             
             needs_regeneration = False
             
-            # CASE A: Missing in Drive? -> Regenerate
             if not drive_bp_id:
                 log("WARNING", f"⚠️ Blueprint missing in Drive for {subject_key}. Regenerating...")
                 needs_regeneration = True
-            
-            # CASE B: Exists in Drive, but is it Stale? (Check PDF ID)
-            elif drive_bp_id:
+            elif drive_bp_id and method_type == "METHOD_1":
+                # Only check PDF changes if it's Method 1
                 download_file(drive_bp_id, "temp_check.json")
                 try:
                     with open("temp_check.json", "r") as f:
                         meta = json.load(f).get('meta', {})
                         if meta.get('main_pdf_id') != main_pdf_id:
-                            log("WARNING", f"🔄 PDF ID Changed (Old: {meta.get('main_pdf_id')} -> New: {main_pdf_id}). Regenerating...")
+                            log("WARNING", "🔄 PDF ID Changed. Regenerating...")
                             needs_regeneration = True
                         else:
                             log("SUCCESS", "✅ Drive Blueprint is fresh.")
-                except:
-                    needs_regeneration = True
+                except: needs_regeneration = True
                 finally:
                     if os.path.exists("temp_check.json"): os.remove("temp_check.json")
+            elif drive_bp_id and method_type == "METHOD_2":
+                # Method 2 doesn't rely on a PDF ID check in the same way
+                log("SUCCESS", "✅ Drive Blueprint exists for Method 2.")
 
-            # CASE C: Missing in Firebase? -> Regenerate (or just Sync)
             if not db_data:
                 log("WARNING", f"⚠️ Data missing in Firebase for {subject_key}. Syncing...")
                 needs_regeneration = True
 
-            # SKIP if everything is perfect
             if not needs_regeneration:
                 log("SKIP", f"⏭️ {subject_key} is 100% Synced (Drive + Firebase).")
                 continue
 
             # =========================================================
-            # 🏗️ GENERATION LOGIC (If we reached here, we must work)
+            # 🏗️ GENERATION LOGIC
             # =========================================================
-            
-            # Detect Method
-            method_type = "UNKNOWN"
-            if 'SYLLABUS_DB.json' in file_map: method_type = "METHOD_2"
-            elif any(f.lower().endswith('index.pdf') for f in file_map): method_type = "METHOD_1"
-            
             log("INFO", f"⚙️ Generating using {method_type}...")
-
             structure = []
+
             if method_type == "METHOD_1":
-                index_name = next((k for k in file_map if 'index' in k.lower()), None)
-                if index_name:
-                    download_file(file_map[index_name], 'index.pdf')
+                index_id = next((fid for name, fid in file_map.items() if 'INDEX' in name), None)
+                if index_id:
+                    download_file(index_id, 'index.pdf')
                     structure = self.analyze_index_method_1('index.pdf')
                     os.remove('index.pdf')
-            # ... (Method 2 logic would go here if you had it) ...
-            
-            # If structure failed, skip
+                    
+            elif method_type == "METHOD_2":
+                # NAYA LOGIC YAHAN HAI
+                db_file_id = file_map.get('SYLLABUS_DB.JSON')
+                if db_file_id:
+                    download_file(db_file_id, 'syllabus_db.json')
+                    try:
+                        with open('syllabus_db.json', 'r', encoding='utf-8') as f:
+                            raw_db = json.load(f)
+                        structure = self.process_db_method_2(raw_db)
+                    except Exception as e:
+                        log("ERROR", f"Failed to read SYLLABUS_DB.JSON: {e}")
+                    finally:
+                        if os.path.exists('syllabus_db.json'):
+                            os.remove('syllabus_db.json')
+
             if not structure:
                 log("ERROR", "Structure Generation Failed.")
                 continue
 
-            # SAVE TO DRIVE
+            # =========================================================
+            # 💾 SAVE TO DRIVE & FIREBASE
+            # =========================================================
             structure = self.generate_ids_and_paths(structure, subject_key)
             blueprint = {
                 "meta": {
                     "subject_key": subject_key,
                     "mode": method_type,
                     "main_pdf_id": main_pdf_id,
+                    "db_file_id": db_file_id,  # 🔥 CRITICAL: Skip logic ke liye zaroori hai
                     "created_at": int(time.time())
                 },
                 "structure": structure
@@ -406,17 +426,26 @@ class AJXArchitect:
 
             # Upload New Blueprint
             new_drive_file_id = upload_json(blueprint, blueprint_name, self.blueprint_id)
-            log("SUCCESS", f"✅ Uploaded new Blueprint to Drive (ID: {new_drive_file_id})")
+            log("SUCCESS", "✅ Uploaded new Blueprint to Drive.")
 
             # 🔥 SYNC TO FIREBASE (The Final Link)
             log("INFO", f"🔥 Syncing IDs to Firebase...")
-            db_ref.update({
-                "blueprint_drive_id": new_drive_file_id, # Crucial Update
-                "pdf_drive_id": main_pdf_id,
+            
+            # Smart Payload (Sirf wahi save karega jo None nahi hai)
+            firebase_payload = {
+                "blueprint_drive_id": new_drive_file_id if new_drive_file_id else "UPLOADED", 
+                "mode": method_type,  # 🔥 Firebase ko batao ki ye Method 1 hai ya 2
                 "status": "ARCHITECT_DONE",
                 "last_updated": int(time.time()),
                 "chapter_count": sum(len(u['chapters']) for u in structure)
-            })
+            }
+            
+            if main_pdf_id: 
+                firebase_payload["pdf_drive_id"] = main_pdf_id
+            if db_file_id: 
+                firebase_payload["db_file_id"] = db_file_id
+
+            db_ref.update(firebase_payload)
             log("SUCCESS", "✅ Firebase Synced.")
             
 if __name__ == "__main__":
