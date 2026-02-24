@@ -372,7 +372,7 @@ class AJXArchitect:
             if not db_data:
                 log("WARNING", f"⚠️ Data missing in Firebase for {subject_key}. Syncing...")
                 needs_regeneration = True
-            elif isinstance(db_data, dict) and "structure" not in db_data:
+            elif isinstance(db_data, dict) and "Structure" not in db_data:
                 # Agar data hai par andar structure (chapters) nahi hain, toh regenerate karo!
                 log("WARNING", f"⚠️ Structure missing in Firebase for {subject_key}. Force Regenerating...")
                 needs_regeneration = True
@@ -447,7 +447,7 @@ class AJXArchitect:
                 "status": "ARCHITECT_DONE",
                 "last_updated": int(time.time()),
                 "chapter_count": sum(len(u['chapters']) for u in structure),
-                "structure": structure
+                "Structure": structure
             }
             
             if main_pdf_id: 
