@@ -173,12 +173,15 @@ def upload_json(data, filename, folder_id):
         
         meta = {'name': filename, 'parents': [folder_id]}
         media = MediaFileUpload(filename, mimetype='application/json')
-        service.files().create(body=meta, media_body=media).execute()
+        # 🔥 FIX: Result ko save karke ID return kiya
+        result = service.files().create(body=meta, media_body=media, fields='id').execute()
         log("SUCCESS", f"Blueprint Uploaded: {filename}")
         
         if os.path.exists(filename): os.remove(filename)
+        return result.get('id') # 🔥 Yahan return lagana zaroori tha!
     except Exception as e:
         log("ERROR", f"Upload Failed ({filename}): {e}")
+        return None
 
 # ==========================================
 # 🏛️ THE ARCHITECT (Brain of the Operation)
@@ -304,6 +307,7 @@ class AJXArchitect:
             
             method_type = "UNKNOWN"
             main_pdf_id = None
+            db_file_id = None
             
             # Identify Method
             if 'SYLLABUS_DB.JSON' in file_map: 
@@ -437,7 +441,8 @@ class AJXArchitect:
                 "mode": method_type,  # 🔥 Firebase ko batao ki ye Method 1 hai ya 2
                 "status": "ARCHITECT_DONE",
                 "last_updated": int(time.time()),
-                "chapter_count": sum(len(u['chapters']) for u in structure)
+                "chapter_count": sum(len(u['chapters']) for u in structure),
+                "structure": structure
             }
             
             if main_pdf_id: 
