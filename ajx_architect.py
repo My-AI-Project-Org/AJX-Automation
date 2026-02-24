@@ -342,7 +342,7 @@ class AJXArchitect:
                     break
             
             # Check Firebase Presence
-            db_ref = db.reference(f'subjects/{subject_key}')
+            db_ref = db.reference(f'Syllabus/{subject_key}')
             db_data = db_ref.get()
             
             needs_regeneration = False
