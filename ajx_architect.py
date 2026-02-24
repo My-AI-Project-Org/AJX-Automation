@@ -368,8 +368,13 @@ class AJXArchitect:
                 # Method 2 doesn't rely on a PDF ID check in the same way
                 log("SUCCESS", "✅ Drive Blueprint exists for Method 2.")
 
+            # 🔥 THE MAGIC FIX: Double Verification
             if not db_data:
                 log("WARNING", f"⚠️ Data missing in Firebase for {subject_key}. Syncing...")
+                needs_regeneration = True
+            elif isinstance(db_data, dict) and "structure" not in db_data:
+                # Agar data hai par andar structure (chapters) nahi hain, toh regenerate karo!
+                log("WARNING", f"⚠️ Structure missing in Firebase for {subject_key}. Force Regenerating...")
                 needs_regeneration = True
 
             if not needs_regeneration:
