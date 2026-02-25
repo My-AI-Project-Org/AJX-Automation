@@ -218,6 +218,7 @@ class AJXOracle:
                         f"DO NOT repeat the concepts from these questions:\n" + "\n".join(existing_qs)
                     )
 
+                # 🔥 STRICT PROMPT: Gemini ko format ke andar baandh do
                 dynamic_prompt = (
                     f"{master_prompt}\n\n"
                     f"--- CONTEXT INFO ---\n"
@@ -226,7 +227,8 @@ class AJXOracle:
                     f"Subtopic Details to Cover: {context}\n"
                     f"Target Number of MCQs for this batch: {current_batch}\n"
                     f"{avoid_text}\n"
-                    f"IMPORTANT: Generate exactly {current_batch} new questions. Return ONLY valid JSON."
+                    f"CRITICAL RULE: Return ONLY a raw JSON array. Start exactly with [ and end exactly with ]. "
+                    f"DO NOT wrap in ```json ``` markdown. DO NOT add any conversational text."
                 )
                 
                 if not self.my_keys:
@@ -237,7 +239,7 @@ class AJXOracle:
                 try:
                     genai.configure(api_key=current_api_key)
                     generation_config = {
-                        "temperature": 0.4, 
+                        "temperature": 0.3, # 🌡️ Temperature 0.3 kar di taaki strict format aaye
                         "top_p": 1, 
                         "top_k": 1, 
                         "max_output_tokens": 16384
@@ -246,9 +248,18 @@ class AJXOracle:
                     
                     log("GEMINI", f"⏳ Generating chunk of {current_batch} MCQs... (Remaining: {remaining_mcqs})")
                     response = model.generate_content(dynamic_prompt)
-                    data = recursive_repair(response.text)
                     
-                    # Agar valid list mili
+                    # 🔥 THE CLEANER: Faltu markdown text hatane ki Ninja Technique
+                    raw_text = response.text.strip()
+                    if raw_text.startswith("```json"): raw_text = raw_text[7:]
+                    elif raw_text.startswith("```"): raw_text = raw_text[3:]
+                    if raw_text.endswith("```"): raw_text = raw_text[:-3]
+                    raw_text = raw_text.strip()
+                    
+                    # Ab saaf text ko repair function mein bhejo
+                    data = recursive_repair(raw_text)
+                    
+                    # Agar valid list mili aur wo khali nahi hai
                     if data and isinstance(data, list) and len(data) > 0:
                         all_generated_mcqs.extend(data)
                         # Jitne actual banaye, utne minus karo
@@ -256,7 +267,7 @@ class AJXOracle:
                         retries = 0 # Agle chunk ke liye retries reset
                         log("SUCCESS", f"✅ Chunk Success! Got {len(data)} MCQs. Total so far: {len(all_generated_mcqs)}/{total_target}")
                     else:
-                        raise Exception("Gemini returned invalid JSON or Empty List")
+                        raise Exception("Cleaned JSON is still invalid or empty.")
 
                 except ResourceExhausted:
                     log("WARNING", f"⚠️ Quota Exceeded for key ...{current_api_key[-5:]}. Removing from pool.")
