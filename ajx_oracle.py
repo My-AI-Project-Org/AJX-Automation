@@ -91,21 +91,39 @@ def download_file(file_id, local_path):
         return False
 
 def upload_json(data, filename, folder_id):
-    """Uploads JSON result back to the same folder"""
+    """Uploads JSON result back to the same folder with Auto-Retry Logic"""
     local_path = f"temp_{filename}"
     try:
+        # 1. Local temp file banao
         with open(local_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4)
         
         meta = {'name': filename, 'parents': [folder_id]}
-        media = MediaFileUpload(local_path, mimetype='application/json')
-        service.files().create(body=meta, media_body=media).execute()
-        return True
+        # 🔥 FIX 1: resumable=True lagaya taaki connection tootne par upload wahi se resume ho sake
+        media = MediaFileUpload(local_path, mimetype='application/json', resumable=True)
+        
+        # 🔥 FIX 2: 3 baar Try karne wala Loop
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 🔥 FIX 3: execute(num_retries=3) inbuilt Google API retry hai
+                service.files().create(body=meta, media_body=media).execute(num_retries=3)
+                # Agar error nahi aaya, matlab success!
+                return True
+            except Exception as upload_err:
+                log("WARNING", f"⚠️ Upload Attempt {attempt + 1}/{max_retries} failed for {filename}: {upload_err}")
+                if attempt < max_retries - 1:
+                    time.sleep(5)  # Connection fresh hone ke liye 5 second ka rest
+                else:
+                    raise upload_err # Agar 3 baar fail ho gaya, toh final error show karo
+
     except Exception as e:
-        log("ERROR", f"Upload failed for {filename}: {e}")
+        log("ERROR", f"Upload failed for {filename} after retries: {e}")
         return False
     finally:
-        if os.path.exists(local_path): os.remove(local_path)
+        # File delete karne ka logic waisa hi rahega
+        if os.path.exists(local_path): 
+            os.remove(local_path)
 
 # ==========================================
 # 🧠 JSON REPAIR (DSA LOGIC from Old Script)
