@@ -257,6 +257,10 @@ class AJXCourier:
             
             bp_data = download_json(bp['id'])
             subject_key = bp_data['meta']['subject_key']
+
+            # 🔥 THE PERMANENT FIX: App ke Index/Home Screen par subject ko zinda (true) karo
+            db.reference("Index/Subjects").update({subject_key: True})
+            log("SUCCESS", f"📚 Registered {subject_key} to App Index.")
             
             running_global_id = last_global_id + 1
             max_id_reached = last_global_id
