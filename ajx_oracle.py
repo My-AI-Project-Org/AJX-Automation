@@ -222,7 +222,7 @@ class AJXOracle:
             master_prompt = meta_data.get('master_prompt', 'Generate MCQs in JSON format.')
             
             # 🔥 NAYA: Chunking Variables
-            CHUNK_SIZE = 15 # Ek baar mein sirf 25 questions mangega
+            CHUNK_SIZE = 5 # Ek baar mein sirf 25 questions mangega
             all_generated_mcqs = []
             remaining_mcqs = total_target
             
@@ -271,18 +271,6 @@ class AJXOracle:
                     
                     log("GEMINI", f"⏳ Generating chunk of {current_batch} MCQs... (Remaining: {remaining_mcqs})")
                     response = model.generate_content(dynamic_prompt)
-
-                    # 🔥 DEBUG LOG: Gemini ne asliyat mein kya bheja
-                    print("\n--- ✨ GEMINI RAW OUTPUT START ---")
-                    print(response.text)
-                    print("--- ✨ GEMINI RAW OUTPUT END ---\n")
-                    
-                    # 🔥 THE CLEANER: Faltu markdown text hatane ki Ninja Technique
-                    raw_text = response.text.strip()
-                    if raw_text.startswith("```json"): raw_text = raw_text[7:]
-                    elif raw_text.startswith("```"): raw_text = raw_text[3:]
-                    if raw_text.endswith("```"): raw_text = raw_text[:-3]
-                    raw_text = raw_text.strip()
                     
                     # Ab saaf text ko repair function mein bhejo
                     data = recursive_repair(raw_text)
@@ -427,10 +415,6 @@ class AJXOracle:
                     # Generate
                     response = model.generate_content([dynamic_prompt, sample_file])
 
-                    # 🔥 DEBUG LOG: Gemini ne asliyat mein kya bheja
-                    print("\n--- ✨ GEMINI IMAGE-OCR OUTPUT START ---")
-                    print(response.text)
-                    print("--- ✨ GEMINI IMAGE-OCR OUTPUT END ---\n")
                     
                     # B. Repair & Validate
                     data = recursive_repair(response.text)
