@@ -129,17 +129,45 @@ def upload_json(data, filename, folder_id):
 # 🧠 JSON REPAIR (DSA LOGIC from Old Script)
 # ==========================================
 def recursive_repair(raw_text):
-    """Extracts JSON from Markdown and repairs syntax errors"""
+    """Isolates JSON array using Regex and parses it with detailed error logging."""
+    clean_text = ""
     try:
-        # 1. Strip Markdown Code Blocks (```json ... ```)
-        clean_text = re.sub(r'```json|```', '', raw_text).strip()
+        # 1. 🔍 REGEX MAGIC: Sirf [ aur ] ke beech ka data uthao
+        # Ye logic conversational text (e.g. "Sure, here is the JSON...") ko filter kar dega.
+        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
         
-        # 2. Find Start/End Brackets to remove preamble text
-        if "[" in clean_text: clean_text = "[" + clean_text.split("[", 1)[1]
-        if "]" in clean_text: clean_text = clean_text.rsplit("]", 1)[0] + "]"
+        if match:
+            clean_text = match.group(0)
+            # Markdown tags (```json) agar abhi bhi andar hain toh unhe saaf karo
+            clean_text = re.sub(r'```json|```', '', clean_text).strip()
+        else:
+            log("ERROR", "❌ [REGEX FAIL] No JSON array '[' and ']' found in Gemini response.")
+            # Raw text ka pehla 100 char dikhao debugging ke liye
+            log("DEBUG", f"📍 Raw Snippet: {raw_text[:100]}...")
+            return None
         
+        # 2. ⚡ PARSING: JSON load karne ki koshish karo
         return json.loads(clean_text)
-    except:
+
+    except json.JSONDecodeError as e:
+        # 3. 🚨 ERROR POLICE: Agar JSON invalid hai, toh batao KAHAN aur KYUN
+        log("ERROR", f"❌ JSON Syntax Error at: Line {e.lineno}, Column {e.colno}")
+        log("ERROR", f"❌ Reason: {e.msg}")
+        
+        # Error ke aas-paas ka context dikhao taaki hum fix kar sakein
+        start = max(0, e.pos - 40)
+        end = min(len(clean_text), e.pos + 40)
+        context = clean_text[start:end].replace('\n', ' ') # Newlines hataye taaki log saaf dikhe
+        
+        log("DEBUG", f"📍 Context near error: ...{context}...")
+        
+        # Check if the JSON was cut off (Truncation)
+        if not clean_text.endswith("]"):
+            log("CRITICAL", "💀 Gemini output was TRUNCATED! (Closing ']' missing). Try reducing CHUNK_SIZE.")
+            
+        return None
+    except Exception as e:
+        log("ERROR", f"❌ Unexpected Failure: {str(e)}")
         return None
 
 # ==========================================
@@ -248,6 +276,11 @@ class AJXOracle:
                     
                     log("GEMINI", f"⏳ Generating chunk of {current_batch} MCQs... (Remaining: {remaining_mcqs})")
                     response = model.generate_content(dynamic_prompt)
+
+                    # 🔥 DEBUG LOG: Gemini ne asliyat mein kya bheja
+                    print("\n--- ✨ GEMINI RAW OUTPUT START ---")
+                    print(response.text)
+                    print("--- ✨ GEMINI RAW OUTPUT END ---\n")
                     
                     # 🔥 THE CLEANER: Faltu markdown text hatane ki Ninja Technique
                     raw_text = response.text.strip()
@@ -398,6 +431,11 @@ class AJXOracle:
                     
                     # Generate
                     response = model.generate_content([dynamic_prompt, sample_file])
+
+                    # 🔥 DEBUG LOG: Gemini ne asliyat mein kya bheja
+                    print("\n--- ✨ GEMINI IMAGE-OCR OUTPUT START ---")
+                    print(response.text)
+                    print("--- ✨ GEMINI IMAGE-OCR OUTPUT END ---\n")
                     
                     # B. Repair & Validate
                     data = recursive_repair(response.text)
