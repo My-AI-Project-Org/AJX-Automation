@@ -227,7 +227,7 @@ class AJXOracle:
             master_prompt = meta_data.get('master_prompt', 'Generate MCQs in JSON format.')
             
             # 🔥 NAYA: Chunking Variables
-            CHUNK_SIZE = 25 # Ek baar mein sirf 25 questions mangega
+            CHUNK_SIZE = 15 # Ek baar mein sirf 25 questions mangega
             all_generated_mcqs = []
             remaining_mcqs = total_target
             
