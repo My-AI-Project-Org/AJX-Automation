@@ -271,6 +271,7 @@ class AJXOracle:
                     
                     log("GEMINI", f"⏳ Generating chunk of {current_batch} MCQs... (Remaining: {remaining_mcqs})")
                     response = model.generate_content(dynamic_prompt)
+                    raw_text = response.text
                     
                     # Ab saaf text ko repair function mein bhejo
                     data = recursive_repair(raw_text)
