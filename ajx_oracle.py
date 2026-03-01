@@ -125,45 +125,40 @@ def upload_json(data, filename, folder_id):
         if os.path.exists(local_path): 
             os.remove(local_path)
 
-# ==========================================
-# 🧠 JSON REPAIR (DSA LOGIC from Old Script)
-# ==========================================
 def recursive_repair(raw_text):
-    """Isolates JSON array using Regex and parses it with detailed error logging."""
+    """Isolates JSON array using Regex and parses it with strict=False to handle control chars."""
     clean_text = ""
     try:
-        # 1. 🔍 REGEX MAGIC: Sirf [ aur ] ke beech ka data uthao
-        # Ye logic conversational text (e.g. "Sure, here is the JSON...") ko filter kar dega.
-        match = re.search(r'\[.*\]', raw_text, re.DOTALL)
+        # 1. 🔍 SMART REGEX: Sirf pehla '[' aur aakhri ']' ke beech ka data uthao
+        # DOTALL (\s*) use kiya hai taaki multi-line conversational text filter ho sake
+        match = re.search(r'\[\s*\{.*\}\s*\]', raw_text, re.DOTALL)
         
         if match:
             clean_text = match.group(0)
-            # Markdown tags (```json) agar abhi bhi andar hain toh unhe saaf karo
+            # Markdown tags (```json) ko saaf karo
             clean_text = re.sub(r'```json|```', '', clean_text).strip()
         else:
-            log("ERROR", "❌ [REGEX FAIL] No JSON array '[' and ']' found in Gemini response.")
-            # Raw text ka pehla 100 char dikhao debugging ke liye
-            log("DEBUG", f"📍 Raw Snippet: {raw_text[:100]}...")
+            log("ERROR", "❌ [FILTER FAIL] JSON array missing in Gemini response.")
             return None
         
-        # 2. ⚡ PARSING: JSON load karne ki koshish karo
-        return json.loads(clean_text)
+        # 2. ⚡ PARSING with strict=False:
+        # 'strict=False' se Gemini ke bheje gaye \n, \t ya invalid control characters parsing crash nahi karenge.
+        return json.loads(clean_text, strict=False)
 
     except json.JSONDecodeError as e:
-        # 3. 🚨 ERROR POLICE: Agar JSON invalid hai, toh batao KAHAN aur KYUN
+        # 3. 🚨 DETAILED LOGGING
         log("ERROR", f"❌ JSON Syntax Error at: Line {e.lineno}, Column {e.colno}")
         log("ERROR", f"❌ Reason: {e.msg}")
         
-        # Error ke aas-paas ka context dikhao taaki hum fix kar sakein
+        # Error ke aas-paas ka context log karein (Bohot zaroori debug ke liye)
         start = max(0, e.pos - 40)
         end = min(len(clean_text), e.pos + 40)
-        context = clean_text[start:end].replace('\n', ' ') # Newlines hataye taaki log saaf dikhe
+        context = clean_text[start:end].replace('\n', ' ')
+        log("DEBUG", f"📍 Error Context: ...{context}...")
         
-        log("DEBUG", f"📍 Context near error: ...{context}...")
-        
-        # Check if the JSON was cut off (Truncation)
+        # Check for Truncation
         if not clean_text.endswith("]"):
-            log("CRITICAL", "💀 Gemini output was TRUNCATED! (Closing ']' missing). Try reducing CHUNK_SIZE.")
+            log("CRITICAL", "💀 Gemini output was TRUNCATED! closing ']' is missing.")
             
         return None
     except Exception as e:
