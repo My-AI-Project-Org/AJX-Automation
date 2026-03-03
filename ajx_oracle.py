@@ -150,11 +150,9 @@ def recursive_repair(raw_text):
         log("ERROR", f"❌ JSON Syntax Error at: Line {e.lineno}, Column {e.colno}")
         log("ERROR", f"❌ Reason: {e.msg}")
         
-        # Error ke aas-paas ka context log karein (Bohot zaroori debug ke liye)
-        start = max(0, e.pos - 40)
-        end = min(len(clean_text), e.pos + 40)
-        context = clean_text[start:end].replace('\n', ' ')
-        log("DEBUG", f"📍 Error Context: ...{context}...")
+        # 3. 🚨 DETAILED LOGGING (Lekin Clean)
+        log("ERROR", f"❌ JSON Syntax Error at: Line {e.lineno}, Column {e.colno}")
+        log("ERROR", f"❌ Reason: {e.msg}")
         
         # Check for Truncation
         if not clean_text.endswith("]"):
@@ -222,7 +220,7 @@ class AJXOracle:
             master_prompt = meta_data.get('master_prompt', 'Generate MCQs in JSON format.')
             
             # 🔥 NAYA: Chunking Variables
-            CHUNK_SIZE = 5 # Ek baar mein sirf 25 questions mangega
+            CHUNK_SIZE = 25 # Ek baar mein sirf 25 questions mangega
             all_generated_mcqs = []
             remaining_mcqs = total_target
             
