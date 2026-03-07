@@ -164,8 +164,7 @@ class AJXMason:
         os.makedirs(self.work_dir)
 
     def clean_filename(self, text):
-        return re.sub(r'[^\w_]', '', str(text).upper().replace(" ", "_")) if text else "UNKNOWN"
-
+         return re.sub(r'[^\w\u0900-\u097F_]', '', str(text).upper().replace(" ", "_")) if text else "UNKNOWN"
 
     def process_chapter_task(self, task_data):
         chapter = task_data['chapter']
