@@ -400,10 +400,12 @@ class AJXOracle:
                     
                     # Upload to Gemini (Temp)
                     sample_file = genai.upload_file(path=img_name, display_name=img_name)
-                    
+
+                    # 🔥 FIX: self.master_prompt ki jagah meta_data se prompt nikaalo
+                    master_prompt = meta_data.get('master_prompt', 'Generate MCQs in JSON format.')
                     # Context Injection
                     dynamic_prompt = (
-                        f"{self.master_prompt}\n\n"
+                        f"{master_prompt}\n\n"
                         f"--- CONTEXT INFO ---\n"
                         f"Subject: {meta_data['subject_key']}\n"
                         f"Chapter: {folder_name}\n"
