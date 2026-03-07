@@ -164,13 +164,12 @@ class AJXMason:
         os.makedirs(self.work_dir)
 
     def clean_filename(self, text):
-         """Sanitizes strings AND Converts to UPPERCASE (Supports Hindi/Devanagari)"""
+          """Sanitizes strings AND Converts to UPPERCASE (Supports Hindi/Devanagari)"""
         if not text:
             return "UNKNOWN"
+            
         text = str(text).upper().replace(" ", "_")
-        
-        # \w matches any word character (English + Hindi + Numbers)
-        return re.sub(r'[^\w_]', '', text) # ✅ Ab Hindi safe rahegi
+        return re.sub(r'[^\w_]', '', text)
 
     def process_chapter_task(self, task_data):
         chapter = task_data['chapter']
