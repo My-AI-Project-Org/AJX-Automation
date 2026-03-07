@@ -165,9 +165,7 @@ class AJXMason:
 
     def clean_filename(self, text):
           """Sanitizes strings AND Converts to UPPERCASE (Supports Hindi/Devanagari)"""
-        if not text:
-            return "UNKNOWN"
-            
+        if not text: return "UNKNOWN"
         text = str(text).upper().replace(" ", "_")
         return re.sub(r'[^\w_]', '', text)
 
