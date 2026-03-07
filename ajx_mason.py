@@ -206,8 +206,7 @@ class AJXMason:
             }
             
             meta_path = os.path.join(local_chap_dir, "meta.json")
-            with open(meta_path, "w") as f: json.dump(meta_data, f, indent=4)
-            
+            with open(meta_path, "w", encoding="utf-8") as f: json.dump(meta_data, f, indent=4, ensure_ascii=False)
             upload_file(meta_path, chap_drive_id, 'application/json')
             log("SUCCESS", f"✅ Created Skeleton & Meta for {folder_name}")
             
