@@ -199,18 +199,8 @@ class AJXArchitect:
         log("SUCCESS", f"Input Folder Ready: {self.input_id}")
 
     def clean_filename(self, text):
-            
-        """Sanitizes strings AND Converts to UPPERCASE (Supports Hindi/Devanagari)"""
-        if not text:
-            return "UNKNOWN"
-            
-        text = str(text).upper() # English ko uppercase karega, Hindi ko chhedga nahi
-        text = text.replace(" ", "_")
+         return re.sub(r'[^\w\u0900-\u097F_]', '', str(text).upper().replace(" ", "_")) if text else "UNKNOWN"
         
-        # \w matches any word character (English + Hindi + Numbers)
-        # ^ ka matlab hai inke alawa jo bhi kachra (special chars) ho, use hata do
-        return re.sub(r'[^\w_]', '', text)
-
     def analyze_index_method_1(self, index_path):
         """METHOD 1: Gemini PDF Analysis"""
         log("INFO", "Method 1 Detected: Starting AI Index Analysis...")
