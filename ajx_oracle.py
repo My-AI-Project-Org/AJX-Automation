@@ -537,6 +537,17 @@ class AJXOracle:
                 target_folder_name = next((name for name in folder_map if name.startswith(f"{chap_id}_")), None)
                 
                 if target_folder_name:
+                     # =========================================================
+                    # 🛑 SKIP LOGIC FOR "APATHIT GADHYANSH"
+                    # =========================================================
+                    # Dono variations daal diye hain (Hindi + Hinglish)
+                    skip_keywords = ["अपठित गद्यांश", "apathit gadhyansh"]
+                    
+                    # lower() use kiya hai taki "Apathit" ya "apathit" dono pakad le
+                    if any(keyword in target_folder_name.lower() for keyword in skip_keywords):
+                        log("SKIP", f"⏭️ Skipping folder: {target_folder_name} (Matches Hindi Skip Logic)")
+                        continue # Ye line agle chapter par jump karwa degi
+                    # =========================================================
                     self.process_chapter(target_folder_name, folder_map[target_folder_name], chap)
                 else:
                     log("WARNING", f"Chapter folder {chap_id} not found in Drive. Did Mason finish?")
