@@ -543,7 +543,7 @@ class AJXOracle:
                     # 🛑 SKIP LOGIC FOR "APATHIT GADHYANSH"
                     # =========================================================
                     # Dono variations daal diye hain (Hindi + Hinglish)
-                    skip_keywords = ["अपठित गद्यांश", "apathit gadhyansh"]
+                    skip_keywords = ["अपठित गद्यांशपद्यांश", "apathit gadhyansh"]
                     
                     # lower() use kiya hai taki "Apathit" ya "apathit" dono pakad le
                     if any(keyword in target_folder_name.lower() for keyword in skip_keywords):
