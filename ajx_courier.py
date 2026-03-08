@@ -222,7 +222,9 @@ class AJXCourier:
         if not merged_data: return "STOP"
 
         for index, mcq in enumerate(merged_data):
-            mcq['id'] = id_to_use + index      # Global ID
+            mcq['id'] = id_to_use + index
+            if 'type' not in mcq:
+                mcq['type'] = "DIRECT"# Global ID
             mcq['local_id'] = index + 1        # Local Sequence
             mcq['display_num'] = index + 1
             mcq['unit'] = unit_name.upper()
