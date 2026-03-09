@@ -429,6 +429,7 @@ class AJXOracle:
                         if upload_json(data, json_target, folder_id):
                             log("SUCCESS", f"✅ Generated {json_target} (Contains {len(data)} MCQs)")
                             success = True
+                            time.sleep(5)
                             break # Kaam ho gaya, loop todo
                     else:
                         raise Exception("Gemini returned invalid/unrepairable JSON")
