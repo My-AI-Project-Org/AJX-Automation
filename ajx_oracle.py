@@ -180,12 +180,16 @@ class AJXOracle:
         all_keys = [k.strip() for k in all_keys_str.split(",") if k.strip()]
         
         # Logic: If 20 keys and 5 workers, Worker 0 gets keys 0-3
-        chunk_size = len(all_keys) // total_shards if total_shards > 0 else 1
-        start = shard_index * chunk_size
-        end = start + chunk_size
+        #chunk_size = len(all_keys) // total_shards if total_shards > 0 else 1
+        #start = shard_index * chunk_size
+        #end = start + chunk_size
         
         # Fallback: If math is weird, take all keys (better than crashing)
-        self.my_keys = all_keys[start:end] if len(all_keys) >= total_shards else all_keys
+        #self.my_keys = all_keys[start:end] if len(all_keys) >= total_shards else all_keys
+        #self.initial_count = len(self.my_keys)
+
+        # 🔥 HACKER FIX: Worker akela hai, toh saari keys isko hi de do!
+        self.my_keys = all_keys
         self.initial_count = len(self.my_keys)
         
         log("ORACLE", f"Worker {shard_index+1}/{total_shards} loaded {len(self.my_keys)} API Keys.")
