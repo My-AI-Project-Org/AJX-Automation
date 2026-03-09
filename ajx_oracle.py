@@ -536,8 +536,8 @@ class AJXOracle:
             # Loop through chapters
             for idx, chap in enumerate(flat_chapters):
                 # 🔥 DEVOPS: SHARDING LOGIC
-                if idx % self.total_shards != self.shard_index:
-                    continue # Not my job, skip
+                #if idx % self.total_shards != self.shard_index:
+                    #continue # Not my job, skip
                 
                 chap_id = chap['id']
                 # Match folder starting with "ID_" (e.g. "101_Stone_Age")
