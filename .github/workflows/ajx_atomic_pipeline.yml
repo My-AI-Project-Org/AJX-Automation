@@ -1,5 +1,10 @@
 name: 🚀 AJX Atomic Pipeline (Waterfall)
 
+# Isse naya push karte hi purana wala apne aap ruk jayega
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   workflow_dispatch:
     inputs:
